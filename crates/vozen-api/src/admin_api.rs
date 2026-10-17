@@ -588,7 +588,7 @@ impl AdminApi {
                 .map_err(|_| AdminGrantError::Store)?;
         }
         let member_history = store
-            .list_admin_member_history(7)
+            .list_admin_member_history(usize::MAX)
             .map_err(|_| AdminGrantError::Store)?;
         Ok(AdminGuildsView {
             guilds,
@@ -936,6 +936,24 @@ mod tests {
             local_day: Arc::new(|| "2026-07-23".into()),
             system_metrics: None,
         })
+    }
+
+    #[test]
+    fn guild_member_history_includes_the_first_reading_beyond_seven_days() {
+        let api = api();
+        {
+            let store = api.store.lock().expect("store");
+            for day in 1..=12 {
+                store
+                    .record_admin_member_total(&format!("2026-07-{day:02}"), day * 10, NOW)
+                    .expect("daily reading");
+            }
+        }
+        let view = api.list_guilds_with_history().expect("guild history");
+        assert_eq!(view.member_history.len(), 12);
+        assert_eq!(view.member_history[0].day, "2026-07-01");
+        assert_eq!(view.member_history[0].count, 10);
+        assert_eq!(view.member_history[11].day, "2026-07-12");
     }
 
     #[tokio::test]
