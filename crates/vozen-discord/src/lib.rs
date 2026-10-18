@@ -19,7 +19,7 @@ use std::{
 use serenity::{
     async_trait,
     client::{Client, Context, EventHandler},
-    gateway::{ActivityData, ConnectionStage, ShardStageUpdateEvent},
+    gateway::{ActivityData, ConnectionStage, ShardManager, ShardStageUpdateEvent},
     model::{
         gateway::{GatewayIntents, Ready},
         id::ChannelId,
@@ -773,6 +773,27 @@ impl GatewayState {
         self.ready.store(all_connected, Ordering::Release);
     }
 
+    /// Serenity may remove a runner during restart without delivering another stage event.
+    /// Missing known shards must remain unavailable until their live runners reconnect.
+    fn reconcile_live_shards(&self, live_stages: BTreeMap<u64, ConnectionStage>) {
+        let all_connected = if let Ok(mut stages) = self.shard_stages.write() {
+            for (id, stage) in stages.iter_mut() {
+                *stage = live_stages
+                    .get(id)
+                    .copied()
+                    .unwrap_or(ConnectionStage::Disconnected);
+            }
+            stages.extend(live_stages);
+            !stages.is_empty()
+                && stages
+                    .values()
+                    .all(|stage| matches!(stage, ConnectionStage::Connected))
+        } else {
+            false
+        };
+        self.ready.store(all_connected, Ordering::Release);
+    }
+
     /// Sets only the bot's own transient voice fact. Used by `/join` and `/leave` to close the
     /// gap before Discord sends the subsequent voice-state gateway update.
     pub(crate) fn set_bot_voice_channel(&self, guild_id: &str, channel_id: Option<String>) {
@@ -1048,11 +1069,12 @@ pub async fn run_discord_gateway_with_state_and_sink(
         .await
         .map_err(|error| DiscordRuntimeError::Serenity(Box::new(error)))?;
     if gateway_watch_enabled() {
+        let shard_manager = client.shard_manager.clone();
         tokio::select! {
             result = client.start_autosharded() => {
                 result.map_err(|error| DiscordRuntimeError::Serenity(Box::new(error)))?;
             }
-            _ = run_gateway_watch(watch_state) => {
+            _ = run_gateway_watch(watch_state, shard_manager) => {
                 return Err(DiscordRuntimeError::GatewayWatchdogRestart);
             }
         }
@@ -1078,7 +1100,7 @@ fn system_now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-async fn run_gateway_watch(gateway_state: GatewayState) {
+async fn run_gateway_watch(gateway_state: GatewayState, shard_manager: Arc<ShardManager>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(
         gateway_watch::CHECK_INTERVAL_MS as u64,
     ));
@@ -1086,6 +1108,14 @@ async fn run_gateway_watch(gateway_state: GatewayState) {
     let mut healthy_ticks = 0_u32;
     loop {
         interval.tick().await;
+        let live_stages = {
+            let runners = shard_manager.runners.lock().await;
+            runners
+                .iter()
+                .map(|(id, runner)| (id.get() as u64, runner.stage))
+                .collect()
+        };
+        gateway_state.reconcile_live_shards(live_stages);
         let decision = gateway_watch::evaluate_gateway(
             gateway_state.is_ready(),
             unhealthy_since_ms,
@@ -1427,6 +1457,76 @@ mod tests {
         assert!(!state.is_ready());
         state.mark_shard_stage(0, ConnectionStage::Connected);
         assert!(state.is_ready());
+    }
+
+    #[test]
+    fn live_shard_snapshot_clears_ready_after_a_runner_disappears() {
+        let state = GatewayState::default();
+        state.mark_shard_stage(0, ConnectionStage::Connected);
+        state.reconcile_live_shards(BTreeMap::new());
+        assert!(!state.is_ready(), "a cached stage is not a live connection");
+    }
+
+    #[test]
+    fn live_shard_snapshot_does_not_hide_a_missing_known_shard() {
+        let state = GatewayState::default();
+        state.mark_shard_stage(0, ConnectionStage::Connected);
+        state.mark_shard_stage(1, ConnectionStage::Connected);
+        state.reconcile_live_shards(BTreeMap::from([(0, ConnectionStage::Connected)]));
+        assert!(
+            !state.is_ready(),
+            "one connected shard cannot hide another missing runner"
+        );
+
+        state.reconcile_live_shards(BTreeMap::from([
+            (0, ConnectionStage::Connected),
+            (1, ConnectionStage::Connected),
+        ]));
+        assert!(state.is_ready(), "all known live shards can recover");
+    }
+
+    #[test]
+    fn live_shard_snapshot_rejects_connecting_and_empty_startup() {
+        let state = GatewayState::default();
+        state.reconcile_live_shards(BTreeMap::new());
+        assert!(!state.is_ready());
+        state.reconcile_live_shards(BTreeMap::from([(0, ConnectionStage::Connecting)]));
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn live_shard_snapshot_fails_closed_if_gateway_state_is_poisoned() {
+        let state = GatewayState::default();
+        state.mark_shard_stage(0, ConnectionStage::Connected);
+        let poisoned = state.clone();
+        std::thread::spawn(move || {
+            let _guard = poisoned.shard_stages.write().expect("state lock");
+            panic!("synthetic state failure");
+        })
+        .join()
+        .expect_err("fixture must poison the state lock");
+        state.reconcile_live_shards(BTreeMap::from([(0, ConnectionStage::Connected)]));
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn live_shard_snapshot_allows_the_existing_watchdog_to_count_the_outage() {
+        let state = GatewayState::default();
+        state.mark_shard_stage(0, ConnectionStage::Connected);
+        state.reconcile_live_shards(BTreeMap::new());
+        let first = gateway_watch::evaluate_gateway(
+            state.is_ready(),
+            None,
+            1_000,
+            gateway_watch::MAX_DOWN_MS,
+        );
+        let expired = gateway_watch::evaluate_gateway(
+            state.is_ready(),
+            first.unhealthy_since_ms,
+            121_001,
+            gateway_watch::MAX_DOWN_MS,
+        );
+        assert!(expired.should_restart);
     }
 
     #[test]
