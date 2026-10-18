@@ -59,8 +59,9 @@ class ImageRetentionTests(unittest.TestCase):
             image = self.rollback if arguments[2] == "vozen-rust:rollback" else arguments[2]
             return json.dumps([self.images[image]])
         if arguments[:2] == ("image", "rm"):
-            self.assertEqual(len(arguments), 3)
-            image = arguments[2]
+            self.assertEqual(len(arguments), 4)
+            self.assertEqual(arguments[2], "--no-prune")
+            image = arguments[3]
             self.assertNotIn(image, (self.current, self.rollback))
             self.assertNotIn(image, self.references.values())
             if self.docker_failure:
@@ -75,22 +76,22 @@ class ImageRetentionTests(unittest.TestCase):
     def test_removes_only_exact_old_ids_and_retains_current_rollback(self):
         self.assertEqual(broker.cleanup_old_images(self.current, self.rollback), 2)
         self.assertEqual(set(self.images), {self.current, self.rollback})
-        self.assertEqual(self.removals(), [("image", "rm", self.old), ("image", "rm", self.extra)])
+        self.assertEqual(self.removals(), [("image", "rm", "--no-prune", self.old), ("image", "rm", "--no-prune", self.extra)])
         self.assertEqual(json.loads((self.root / "state.json").read_text()), self.state)
-        self.assertFalse(any("prune" in item or "--force" in item or "volume" in item
+        self.assertFalse(any(item in {"prune", "--force", "volume"}
                              for command in self.commands for item in command))
 
     def test_protects_running_and_stopped_container_references(self):
         self.references["f" * 64] = self.old
         broker.cleanup_old_images(self.current, self.rollback)
         self.assertIn(self.old, self.images)
-        self.assertEqual(self.removals(), [("image", "rm", self.extra)])
+        self.assertEqual(self.removals(), [("image", "rm", "--no-prune", self.extra)])
 
     def test_rechecks_new_container_reference_before_removal(self):
         self.protect_old_later = True
         broker.cleanup_old_images(self.current, self.rollback)
         self.assertIn(self.old, self.images)
-        self.assertEqual(self.removals(), [("image", "rm", self.extra)])
+        self.assertEqual(self.removals(), [("image", "rm", "--no-prune", self.extra)])
 
     def test_preserves_other_repository_aliases_and_untagged_images(self):
         self.images[self.old]["RepoTags"].append("unrelated:keep")
