@@ -37,6 +37,19 @@ struct Current {
     starts: i64,
     ends: i64,
     release_schedule: Option<String>,
+    pending_schedule: Option<(String, String)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CancelConfirmation {
+    user: String,
+    subscription: String,
+    item: String,
+    price: String,
+    schedule: String,
+    target_price: String,
+    ends: i64,
+    issued: i64,
 }
 
 fn failure(state: &StripeState, status: StatusCode, error: &str) -> Response {
@@ -183,6 +196,7 @@ async fn current(state: &StripeState, user: &str, id: &str) -> Result<Current, S
     }
     let mut value = value;
     let mut release_schedule = None;
+    let mut pending_schedule = None;
     if let Some(id) = value
         .get("schedule")
         .and_then(Value::as_str)
@@ -221,6 +235,57 @@ async fn current(state: &StripeState, user: &str, id: &str) -> Result<Current, S
         {
             release_schedule = Some(id.to_owned());
             value["schedule"] = Value::Null;
+        } else if schedule.get("id").and_then(Value::as_str) == Some(id)
+            && schedule.get("subscription").and_then(Value::as_str)
+                == Some(stored.subscription_id.as_str())
+            && schedule.get("customer").and_then(Value::as_str) == Some(stored.customer_id.as_str())
+            && schedule.get("livemode").and_then(Value::as_bool) == Some(live(state))
+            && schedule.get("status").and_then(Value::as_str) == Some("active")
+            && schedule
+                .pointer("/metadata/vozen_plan_change")
+                .and_then(Value::as_str)
+                == Some("v1")
+            && schedule
+                .pointer("/metadata/discord_user_id")
+                .and_then(Value::as_str)
+                == Some(user)
+            && effective == Some(ends)
+            && schedule
+                .pointer("/current_phase/start_date")
+                .and_then(Value::as_i64)
+                == Some(starts)
+            && schedule
+                .pointer("/current_phase/end_date")
+                .and_then(Value::as_i64)
+                == Some(ends)
+            && let Some(target) = schedule
+                .pointer("/metadata/target_price")
+                .and_then(Value::as_str)
+                .filter(|target| state.prices.plan_for_price(target).is_some())
+        {
+            let phase_matches = schedule
+                .get("phases")
+                .and_then(Value::as_array)
+                .is_some_and(|phases| {
+                    phases.iter().any(|phase| {
+                        phase.get("start_date").and_then(Value::as_i64) == Some(ends)
+                            && phase
+                                .get("items")
+                                .and_then(Value::as_array)
+                                .is_some_and(|items| {
+                                    items.len() == 1
+                                        && items[0].get("price").and_then(Value::as_str)
+                                            == Some(target)
+                                        && items[0].get("quantity").and_then(Value::as_i64)
+                                            == Some(1)
+                                })
+                    })
+                });
+            let mut without_schedule = value.clone();
+            without_schedule["schedule"] = Value::Null;
+            if phase_matches && !unsupported(&without_schedule) {
+                pending_schedule = Some((id.to_owned(), target.to_owned()));
+            }
         }
     }
     Ok(Current {
@@ -232,6 +297,7 @@ async fn current(state: &StripeState, user: &str, id: &str) -> Result<Current, S
         starts,
         ends,
         release_schedule,
+        pending_schedule,
     })
 }
 
@@ -258,15 +324,122 @@ pub(super) async fn plans(
     let mut subscriptions = Vec::new();
     for id in ids {
         if let Ok(sub) = current(&state, &user.id, &id).await {
+            let cancel_token = sub.pending_schedule.as_ref().map(|(schedule, target)| {
+                sign_cancel(
+                    &state,
+                    &CancelConfirmation {
+                        user: user.id.clone(),
+                        subscription: id.clone(),
+                        item: sub.item.clone(),
+                        price: sub.price.clone(),
+                        schedule: schedule.clone(),
+                        target_price: target.clone(),
+                        ends: sub.ends,
+                        issued: (state.now)() / 1000,
+                    },
+                )
+            });
             subscriptions.push(
                 json!({"id":id,"plan":sub.plan,"interval":sub.interval,"periodEnd":sub.ends,
-                "changeable":!unsupported(&sub.value)}),
+                "changeable":!unsupported(&sub.value),"cancelToken":cancel_token}),
             );
         }
     }
     json_no_store_response(
         StatusCode::OK,
         json!({"subscriptions":subscriptions}),
+        &state,
+    )
+}
+
+fn sign_cancel(state: &StripeState, confirmation: &CancelConfirmation) -> String {
+    let payload = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(confirmation).expect("serializable cancellation"));
+    let mut mac =
+        HmacSha256::new_from_slice(state.webhook_secret.as_bytes()).expect("HMAC accepts any key");
+    mac.update(b"vozen-cancel-plan-change-v1:");
+    mac.update(payload.as_bytes());
+    format!(
+        "{payload}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    )
+}
+
+pub(super) async fn cancel_pending(
+    State(state): State<StripeState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Some(response) = guard(&state, &method) {
+        return response;
+    }
+    let Some(user) = identity(&state, &headers).await else {
+        return failure(&state, StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let token = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("token").and_then(Value::as_str).map(str::to_owned));
+    let parsed = (|| {
+        let token = token.as_ref().filter(|token| token.len() <= 8192)?;
+        let (payload, signature) = token.split_once('.')?;
+        let mut mac = HmacSha256::new_from_slice(state.webhook_secret.as_bytes()).ok()?;
+        mac.update(b"vozen-cancel-plan-change-v1:");
+        mac.update(payload.as_bytes());
+        mac.verify_slice(&URL_SAFE_NO_PAD.decode(signature).ok()?)
+            .ok()?;
+        serde_json::from_slice::<CancelConfirmation>(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()
+    })();
+    let Some(change) = parsed.filter(|change| {
+        change.user == user.id
+            && (state.now)() / 1000 >= change.issued
+            && (state.now)() / 1000 - change.issued <= 300
+    }) else {
+        return failure(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "preview_expired_or_invalid",
+        );
+    };
+    let _gate = state.change_gate.lock().await;
+    if (state.now)() / 1000 - change.issued > 300 {
+        return failure(
+            &state,
+            StatusCode::BAD_REQUEST,
+            "preview_expired_or_invalid",
+        );
+    }
+    let sub = match current(&state, &user.id, &change.subscription).await {
+        Ok(sub) => sub,
+        Err(status) => return failure(&state, status, "subscription_unavailable"),
+    };
+    if sub.item != change.item
+        || sub.price != change.price
+        || sub.ends != change.ends
+        || sub.pending_schedule != Some((change.schedule.clone(), change.target_price))
+    {
+        return failure(&state, StatusCode::CONFLICT, "pending_change_stale");
+    }
+    let digest = Sha256::digest(token.as_ref().expect("verified token").as_bytes());
+    let key = format!("vozen-cancel-change-{}", URL_SAFE_NO_PAD.encode(digest));
+    let result = state
+        .subscription_lookup
+        .post(
+            &format!("subscription_schedules/{}/release", change.schedule),
+            &[],
+            &key,
+        )
+        .await;
+    if !result.is_ok_and(|value| {
+        value.get("id").and_then(Value::as_str) == Some(change.schedule.as_str())
+            && value.get("livemode").and_then(Value::as_bool) == Some(live(&state))
+            && value.get("status").and_then(Value::as_str) == Some("released")
+    }) {
+        return failure(&state, StatusCode::BAD_GATEWAY, "schedule_needs_review");
+    }
+    json_no_store_response(
+        StatusCode::OK,
+        json!({"status":"schedule_canceled"}),
         &state,
     )
 }

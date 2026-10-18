@@ -1766,6 +1766,8 @@
         next: "New recurring price", due: "Due now", effective: "Starts on", pending: "Stripe is confirming your payment. Access updates after payment succeeds.",
         scheduled: "Change scheduled. Your current paid access remains until", seats: "On a smaller server plan, the oldest linked servers keep access up to the new limit. Other server links stay saved.",
         personal: "Plus covers your account, not server licenses. Stripe server access ends on that date; independent benefits remain.",
+        pendingChange: "A change is already scheduled. Remove it to choose another plan or cancel renewal through billing management. Your current subscription stays active.",
+        remove: "Remove scheduled change", removed: "Scheduled change removed. Your current subscription is unchanged. Open billing management if you want to cancel renewal.",
       };
       const pt = {
         title: "Trocar de plano", policy: "Os upgrades exigem pagamento. Os downgrades e as trocas de anual para mensal começam no fim do período já pago.",
@@ -1778,18 +1780,22 @@
         next: "Novo preço recorrente", due: "A pagar agora", effective: "Começa em", pending: "A Stripe está a confirmar o pagamento. O acesso muda após o pagamento ter sucesso.",
         scheduled: "Troca agendada. Manténs o acesso já pago até", seats: "Num plano com menos servidores, os servidores associados há mais tempo mantêm o acesso até ao novo limite. As restantes associações ficam guardadas.",
         personal: "O Plus cobre a tua conta, não licenças de servidor. O acesso Stripe dos servidores termina nessa data; os benefícios independentes mantêm-se.",
+        pendingChange: "Já existe uma troca agendada. Remove-a para escolher outro plano ou cancelar a renovação na gestão de faturação. A tua subscrição atual mantém-se ativa.",
+        remove: "Remover troca agendada", removed: "Troca agendada removida. A tua subscrição atual não mudou. Abre a gestão de faturação se quiseres cancelar a renovação.",
       };
       return (lang.startsWith("pt") ? pt : en)[key];
     };
     let quote = null;
     let busy = false;
     let subscriptions = [];
+    let pendingToken = null;
     const status = (message) => { node("Status").textContent = message; };
     const resetQuote = () => {
       quote = null;
       node("Preview").hidden = false;
       node("Confirm").hidden = true;
       node("Confirm").disabled = true;
+      node("CancelScheduled").hidden = !pendingToken;
     };
     const setBusy = (value) => {
       busy = value;
@@ -1797,6 +1803,8 @@
         node(id).disabled = value || (["Subscription", "Plan", "Interval"].includes(id) && !subscriptions.length);
       });
       node("Preview").disabled = value || !subscriptions.length;
+      ["Plan", "Interval", "Preview"].forEach((id) => { node(id).disabled ||= !!pendingToken; });
+      node("CancelScheduled").disabled = value || !pendingToken;
       node("Confirm").disabled = value || !quote;
     };
     async function planApi(route, body = {}) {
@@ -1811,10 +1819,15 @@
       return payload;
     }
     function selectCurrentSubscription() {
+      pendingToken = null;
       resetQuote();
       const current = subscriptions.find((item) => item.id === node("Subscription").value);
       if (current) { node("Plan").value = current.plan; node("Interval").value = current.interval; }
-      status(copy("choose"));
+      pendingToken = current?.cancelToken || null;
+      node("CancelScheduled").hidden = !pendingToken;
+      node("Preview").hidden = !!pendingToken;
+      status(copy(pendingToken ? "pendingChange" : "choose"));
+      setBusy(false);
     }
     const trigger = document.getElementById("accountPlanChange");
     trigger.querySelector("b").textContent = copy("title");
@@ -1829,17 +1842,19 @@
       node("Title").textContent = copy("title");
       node("Policy").textContent = copy("policy");
       node("Close").textContent = copy("close");
+      node("CancelScheduled").textContent = copy("remove");
       node("Preview").textContent = copy("preview");
       ["Subscription", "Plan", "Interval"].forEach((id) => {
         document.querySelector(`label[for="planChange${id}"]`).textContent = copy(id.toLowerCase());
       });
       [...node("Interval").options].forEach((option) => { option.textContent = copy(option.value); });
       subscriptions = [];
+      pendingToken = null;
       node("Subscription").replaceChildren();
       resetQuote(); setBusy(true); status(copy("loading")); planDialog.showModal();
       try {
         const payload = await planApi("plans");
-        subscriptions = (payload.subscriptions || []).filter((item) => item.changeable);
+        subscriptions = (payload.subscriptions || []).filter((item) => item.changeable || item.cancelToken);
         subscriptions.forEach((item, index) => {
           const option = document.createElement("option");
           option.value = item.id;
@@ -1857,7 +1872,7 @@
     ["Plan", "Interval"].forEach((id) => node(id).addEventListener("change", () => { resetQuote(); status(copy("choose")); }));
     node("Form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (busy || !subscriptions.length) return;
+      if (busy || !subscriptions.length || pendingToken) return;
       resetQuote(); setBusy(true);
       try {
         quote = await planApi("change/preview", { subscription_id: node("Subscription").value, plan: node("Plan").value, interval: node("Interval").value });
@@ -1885,6 +1900,21 @@
         void loadPanel();
       } catch { status(copy("error")); subscriptions = []; }
       finally { setBusy(false); }
+    });
+    node("CancelScheduled").addEventListener("click", async () => {
+      if (busy || !pendingToken) return;
+      const token = pendingToken;
+      setBusy(true);
+      try {
+        await planApi("change/cancel", { token });
+        status(copy("removed"));
+      } catch { status(copy("error")); }
+      finally {
+        pendingToken = null;
+        subscriptions = [];
+        resetQuote();
+        setBusy(false);
+      }
     });
   }
 

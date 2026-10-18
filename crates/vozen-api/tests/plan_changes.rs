@@ -99,6 +99,7 @@ impl StripeSubscriptionLookup for Provider {
             return Ok(json!({"id":"sub_sched_owned","livemode":false}));
         }
         if route == "subscription_schedules/sub_sched_owned/release" {
+            self.subscription.lock().unwrap()["schedule"] = Value::Null;
             return Ok(json!({"id":"sub_sched_owned","livemode":false,"status":"released"}));
         }
         Err(())
@@ -433,4 +434,108 @@ async fn a_schedule_owned_by_another_integration_is_not_released_or_replaced() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(provider.posts.lock().unwrap().is_empty());
+}
+
+fn pending_owned_schedule(provider: &Provider) {
+    let mut sub = provider.subscription.lock().unwrap();
+    sub["schedule"] = json!("sub_sched_owned");
+    sub["qa_schedule"] = json!({"id":"sub_sched_owned","subscription":"sub_owned","customer":"cus_owned","livemode":false,"status":"active",
+        "current_phase":{"start_date":NOW/1000,"end_date":END},
+        "metadata":{"vozen_plan_change":"v1","discord_user_id":"owner","target_price":"price_premium_month","effective_at":END.to_string()},
+        "phases":[{"start_date":NOW/1000,"end_date":END,"items":[{"price":"price_plus_month","quantity":1}]},
+        {"start_date":END,"items":[{"price":"price_premium_month","quantity":1}]}]});
+}
+
+#[tokio::test]
+async fn pending_owned_change_can_be_removed_without_canceling_or_changing_paid_rights() {
+    let (app, db, provider, _) = fixture();
+    pending_owned_schedule(&provider);
+    let before = db.lock().unwrap().stripe_subscription("sub_owned").unwrap();
+    let (status, listed) = request(&app, "/api/billing/plans", "owner", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let sub = &listed["subscriptions"][0];
+    assert_eq!(sub["changeable"], false);
+    let token = sub["cancelToken"]
+        .as_str()
+        .expect("owned pending-change token");
+    assert!(provider.posts.lock().unwrap().is_empty());
+    let (status, result) = request(
+        &app,
+        "/api/billing/change/cancel",
+        "owner",
+        json!({"token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["status"], "schedule_canceled");
+    assert_eq!(
+        db.lock().unwrap().stripe_subscription("sub_owned").unwrap(),
+        before
+    );
+    assert_eq!(
+        provider.subscription.lock().unwrap()["items"]["data"][0]["price"]["id"],
+        "price_plus_month"
+    );
+    assert_eq!(provider.posts.lock().unwrap().len(), 1);
+    assert_eq!(
+        provider.posts.lock().unwrap()[0].0,
+        "subscription_schedules/sub_sched_owned/release"
+    );
+    let (status, _) = request(
+        &app,
+        "/api/billing/change/cancel",
+        "owner",
+        json!({"token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(provider.posts.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn removing_a_pending_change_rechecks_identity_time_schedule_and_mode() {
+    for case in [
+        "tampered",
+        "other_user",
+        "expired",
+        "changed_schedule",
+        "wrong_mode",
+        "foreign_metadata",
+        "boundary",
+    ] {
+        let (app, _, provider, clock) = fixture();
+        pending_owned_schedule(&provider);
+        let (_, listed) = request(&app, "/api/billing/plans", "owner", json!({})).await;
+        let mut token = listed["subscriptions"][0]["cancelToken"]
+            .as_str()
+            .expect("cancel token")
+            .to_string();
+        let mut user = "owner";
+        match case {
+            "tampered" => token.push('x'),
+            "other_user" => user = "other",
+            "expired" => clock.store(NOW + 301_000, Ordering::SeqCst),
+            "changed_schedule" => {
+                provider.subscription.lock().unwrap()["schedule"] = json!("sub_sched_other")
+            }
+            "wrong_mode" => {
+                provider.subscription.lock().unwrap()["qa_schedule"]["livemode"] = json!(true)
+            }
+            "foreign_metadata" => {
+                provider.subscription.lock().unwrap()["qa_schedule"]["metadata"]["discord_user_id"] =
+                    json!("other")
+            }
+            "boundary" => clock.store(END * 1000, Ordering::SeqCst),
+            _ => unreachable!(),
+        }
+        let (status, _) = request(
+            &app,
+            "/api/billing/change/cancel",
+            user,
+            json!({"token":token}),
+        )
+        .await;
+        assert!(!status.is_success(), "{case}");
+        assert!(provider.posts.lock().unwrap().is_empty(), "{case}");
+    }
 }
