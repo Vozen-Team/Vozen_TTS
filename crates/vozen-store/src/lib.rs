@@ -92,7 +92,8 @@ pub use pronunciation::{
 pub use runtime_batch::{RuntimeBatchBuffer, RuntimeBatchEvent};
 pub use runtime_outbox::{RuntimeOutboxBatch, RuntimeOutboxEnqueue, RuntimeOutboxMetrics};
 pub use stripe::{
-    StripeEventApplyOutcome, StripeEventInput, StripeSubscription, StripeSubscriptionInput,
+    StripeEventApplyOutcome, StripeEventInput, StripePaidPlan, StripeSubscription,
+    StripeSubscriptionInput,
 };
 pub use stt_consent::SttConsent;
 pub use stt_usage::{PLUS_STT_DAILY_LIMIT_MS, PREMIUM_STT_DAILY_LIMIT_MS, SttUsageReservation};

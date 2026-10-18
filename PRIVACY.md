@@ -44,6 +44,14 @@ Vozen stores the data below in a local **SQLite** database (by default `tts.db`,
 | **Activation consent evidence** | `kofi_activation_consent`                  | `transaction_id`, `confirmation_id`, `discord_id`, `accepted_at`, `terms_version`, `method`                                                                                                                                                                                 | Minimum evidence that immediate digital delivery was requested for an activated purchase. It contains neither an email nor an email hash and is retained with the minimum payment record for accounting, disputes, fraud prevention, and legal obligations.                                                             |
 | **HD-TTS usage counter**        | `gcloud_usage`                             | `scope`, `key`, `month`, `chars`                                                                                                                                                                                                                                            | Monthly character count of the paid Google HD voice, per pool. When `scope` is `user`/`pass`, `key` is your Discord ID (removed by `/privacy erase`); `guild`/`global` pools are retained and auto-purged after ~3 months.                                                                                              |
 
+Stripe paid periods are stored separately in `stripe_paid_entitlement`: subscription ID,
+Discord user ID, invoice ID, invoice/period timestamps, plan and seat limit. This is a
+minimum financial/entitlement record, not message content or card data. It follows
+the retained-payment-record rule in section 3, including operator-assisted deletion
+or anonymization when no longer necessary; `/privacy erase` does not cancel paid
+subscriptions or erase their accounting evidence. Plan previews are short-lived
+signed confirmations and are not stored as a separate personal-data ledger.
+
 Note on opt-out: running `/voice optout` **creates** a record with your `user_id` (so the bot remembers the preference). `/voice optin` removes that record. No other information about you is stored.
 
 ### 1.1 Website login (vozen.org)

@@ -21,7 +21,7 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
 
     <link rel="stylesheet" href="css/main-v43.css" />
-    <link rel="stylesheet" href="css/account-v6.css" />
+    <link rel="stylesheet" href="css/account-v6.css?v=plan-change-v1" />
     <link rel="stylesheet" href="css/billing-v3.css?v=compact-checkout-v1" />
     <style>
       body.page-account:not(.is-account-ready) main,
@@ -144,6 +144,13 @@
                     </span>
                     <svg class="account-task__arrow" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 10h10M11 6l4 4-4 4"/></svg>
                   </button>
+                  <button class="account-task" type="button" id="accountPlanChange">
+                    <span class="account-task__copy">
+                      <b>Change plan</b>
+                      <small>Preview an upgrade or schedule a downgrade</small>
+                    </span>
+                    <span class="account-task__arrow" aria-hidden="true">↗</span>
+                  </button>
                 </nav>
 
                 <a class="account-plans-link" href="/#premium"><span data-i18n="account.comparePlans">Not sure which plan you need? Compare plans</span> <span aria-hidden="true">↗</span></a>
@@ -177,6 +184,31 @@
         </div>
       </section>
     </main>
+    <dialog class="plan-change" id="planChangeDialog" aria-labelledby="planChangeTitle">
+      <form id="planChangeForm">
+        <h2 id="planChangeTitle">Change plan</h2>
+        <p id="planChangePolicy">Upgrades require payment. Downgrades start when your current paid period ends.</p>
+        <label for="planChangeSubscription">Subscription</label>
+        <select id="planChangeSubscription" required disabled></select>
+        <label for="planChangePlan">New plan</label>
+        <select id="planChangePlan" required>
+          <option value="plus">Plus</option>
+          <option value="premium">Premium</option>
+          <option value="max">Max</option>
+        </select>
+        <label for="planChangeInterval">Billing interval</label>
+        <select id="planChangeInterval" required>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+        <p id="planChangeStatus" role="status" aria-live="polite"></p>
+        <div class="plan-change__actions">
+          <button class="btn" type="button" id="planChangeClose">Close</button>
+          <button class="btn btn--primary" type="submit" id="planChangePreview">Preview change</button>
+          <button class="btn btn--primary" type="button" id="planChangeConfirm" hidden disabled>Confirm change</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- ─────────────── FOOTER ─────────────── -->
     <footer class="foot">
@@ -215,7 +247,7 @@
 
     <script defer src="js/i18n-v41.js?v=payment-element"></script>
     <script defer data-vozen-stripe src="https://js.stripe.com/dahlia/stripe.js"></script>
-    <script defer src="js/main-v51.js?v=embedded-checkout-v1"></script>
+    <script defer src="js/main-v51.js?v=embedded-checkout-v2-plan-changes"></script>
     <script defer src="js/motion-v1.js"></script>
   </body>
 </html>

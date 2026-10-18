@@ -37,8 +37,11 @@ impl SqliteStore {
     /// Lists active direct Plus and multi-seat passes, newest expiry first.
     pub fn list_active_premium(&self, now: i64) -> Result<AdminPassesView, StoreError> {
         let mut plus_statement = self.connection().prepare(
-            "SELECT user_id, expires_at, source FROM premium_user
-             WHERE expires_at > ?1 ORDER BY expires_at DESC LIMIT ?2",
+            "WITH sources AS (
+                SELECT user_id,expires_at,source FROM premium_user
+                UNION ALL SELECT user_id,expires_at,'stripe' FROM stripe_paid_entitlement WHERE plan='plus'
+             ) SELECT user_id,MAX(expires_at),source FROM sources
+             WHERE expires_at > ?1 GROUP BY user_id ORDER BY MAX(expires_at) DESC LIMIT ?2",
         )?;
         let plus = plus_statement
             .query_map(params![now, ACTIVE_SCAN_CAP], |row| {
@@ -51,10 +54,13 @@ impl SqliteStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut pass_statement = self.connection().prepare(
-            "SELECT p.user_id, p.seats, p.expires_at, p.source,
+            &format!("{} SELECT p.user_id, p.seats, p.expires_at, p.source,
                     (SELECT COUNT(*) FROM premium_pass_activation a WHERE a.user_id = p.user_id)
-             FROM premium_pass p
-             WHERE p.expires_at > ?1 ORDER BY p.expires_at DESC LIMIT ?2",
+             FROM pass_sources p
+             WHERE p.expires_at > ?1 AND NOT EXISTS (
+                SELECT 1 FROM pass_sources higher WHERE higher.user_id=p.user_id AND higher.expires_at > ?1
+                AND (higher.seats > p.seats OR (higher.seats=p.seats AND higher.expires_at > p.expires_at))
+             ) GROUP BY p.user_id ORDER BY p.expires_at DESC LIMIT ?2", crate::premium::PASS_SOURCES),
         )?;
         let passes = pass_statement
             .query_map(params![now, ACTIVE_SCAN_CAP], |row| {
@@ -73,23 +79,25 @@ impl SqliteStore {
 
     /// Removes a direct Plus row. Returns whether anything was revoked.
     pub fn revoke_user_premium(&self, user_id: &str) -> Result<bool, StoreError> {
-        Ok(self
-            .connection()
-            .execute("DELETE FROM premium_user WHERE user_id = ?1", [user_id])?
-            > 0)
+        let transaction = self.connection().unchecked_transaction()?;
+        let direct = transaction.execute("DELETE FROM premium_user WHERE user_id=?1", [user_id])?;
+        let paid = transaction.execute("UPDATE stripe_paid_entitlement SET expires_at=0 WHERE user_id=?1 AND plan='plus' AND expires_at>0", [user_id])?;
+        transaction.commit()?;
+        Ok(direct + paid > 0)
     }
 
     /// Removes a pass and all activations atomically. Returns whether the pass existed.
     pub fn revoke_guild_pass(&self, user_id: &str) -> Result<bool, StoreError> {
         let transaction = self.connection().unchecked_transaction()?;
         let removed =
-            transaction.execute("DELETE FROM premium_pass WHERE user_id = ?1", [user_id])? > 0;
+            transaction.execute("DELETE FROM premium_pass WHERE user_id = ?1", [user_id])?;
+        let paid = transaction.execute("UPDATE stripe_paid_entitlement SET expires_at=0 WHERE user_id=?1 AND plan IN ('premium','max') AND expires_at>0", [user_id])?;
         transaction.execute(
             "DELETE FROM premium_pass_activation WHERE user_id = ?1",
             [user_id],
         )?;
         transaction.commit()?;
-        Ok(removed)
+        Ok(removed + paid > 0)
     }
 }
 

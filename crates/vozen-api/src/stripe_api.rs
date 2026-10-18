@@ -23,10 +23,12 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use vozen_store::{
-    SqliteStore, StripeEventApplyOutcome, StripeEventInput, StripeSubscriptionInput,
+    SqliteStore, StripeEventApplyOutcome, StripeEventInput, StripePaidPlan, StripeSubscriptionInput,
 };
 
 use crate::premium_api::DiscordIdentityVerifier;
+
+mod plan_changes;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -52,6 +54,22 @@ pub struct StripePriceIds {
 }
 
 impl StripePriceIds {
+    fn plan_for_price(&self, price: &str) -> Option<(&'static str, i64)> {
+        let mut found = None;
+        for (plan, seats, ids) in [
+            ("plus", 1, [&self.plus_monthly, &self.plus_yearly]),
+            ("premium", 2, [&self.premium_monthly, &self.premium_yearly]),
+            ("max", 5, [&self.max_monthly, &self.max_yearly]),
+        ] {
+            if ids.iter().any(|id| id.as_str() == price) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((plan, seats));
+            }
+        }
+        found
+    }
     fn get(&self, plan: &str, interval: &str) -> Option<(&str, i64)> {
         match (plan, interval) {
             ("plus", "monthly") => Some((&self.plus_monthly, 1)),
@@ -110,6 +128,7 @@ struct StripeState {
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
     client: reqwest::Client,
     subscription_lookup: Arc<dyn StripeSubscriptionLookup>,
+    change_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn stripe_router(config: StripeApiConfig) -> Result<Router, StripeApiConfigError> {
@@ -121,6 +140,20 @@ pub fn stripe_router(config: StripeApiConfig) -> Result<Router, StripeApiConfigE
 #[async_trait::async_trait]
 pub trait StripeSubscriptionLookup: Send + Sync {
     async fn retrieve(&self, subscription_id: &str) -> Result<Value, ()>;
+    async fn schedule(&self, _schedule_id: &str) -> Result<Value, ()> {
+        Err(())
+    }
+    async fn price(&self, _price_id: &str) -> Result<Value, ()> {
+        Err(())
+    }
+    async fn post(
+        &self,
+        _route: &str,
+        _form: &[(String, String)],
+        _idempotency: &str,
+    ) -> Result<Value, ()> {
+        Err(())
+    }
 }
 
 struct ProviderSubscriptionLookup {
@@ -130,6 +163,59 @@ struct ProviderSubscriptionLookup {
 
 #[async_trait::async_trait]
 impl StripeSubscriptionLookup for ProviderSubscriptionLookup {
+    async fn schedule(&self, schedule_id: &str) -> Result<Value, ()> {
+        self.client
+            .get(format!("{STRIPE_API}/subscription_schedules/{schedule_id}"))
+            .header("Stripe-Version", STRIPE_API_VERSION)
+            .basic_auth(&self.secret, Some(""))
+            .send()
+            .await
+            .map_err(|_| ())?
+            .error_for_status()
+            .map_err(|_| ())?
+            .json()
+            .await
+            .map_err(|_| ())
+    }
+    async fn price(&self, price_id: &str) -> Result<Value, ()> {
+        self.client
+            .get(format!("{STRIPE_API}/prices/{price_id}"))
+            .header("Stripe-Version", STRIPE_API_VERSION)
+            .basic_auth(&self.secret, Some(""))
+            .send()
+            .await
+            .map_err(|_| ())?
+            .error_for_status()
+            .map_err(|_| ())?
+            .json()
+            .await
+            .map_err(|_| ())
+    }
+    async fn post(
+        &self,
+        route: &str,
+        form: &[(String, String)],
+        idempotency: &str,
+    ) -> Result<Value, ()> {
+        let mut request = self
+            .client
+            .post(format!("{STRIPE_API}/{route}"))
+            .header("Stripe-Version", STRIPE_API_VERSION)
+            .basic_auth(&self.secret, Some(""));
+        if !idempotency.is_empty() {
+            request = request.header("Idempotency-Key", idempotency);
+        }
+        request
+            .form(form)
+            .send()
+            .await
+            .map_err(|_| ())?
+            .error_for_status()
+            .map_err(|_| ())?
+            .json()
+            .await
+            .map_err(|_| ())
+    }
     async fn retrieve(&self, subscription_id: &str) -> Result<Value, ()> {
         self.client
             .get(format!("{STRIPE_API}/subscriptions/{subscription_id}"))
@@ -192,6 +278,9 @@ fn build_stripe_router(
         })
     });
     let router = Router::new()
+        .route("/api/billing/plans", any(plan_changes::plans))
+        .route("/api/billing/change/preview", any(plan_changes::preview))
+        .route("/api/billing/change/confirm", any(plan_changes::confirm))
         .route("/api/billing/checkout", any(checkout))
         .route("/api/billing/checkout/elements", any(checkout_elements))
         .route("/api/billing/checkout/status", any(checkout_status))
@@ -208,6 +297,7 @@ fn build_stripe_router(
             now: config.now,
             client,
             subscription_lookup,
+            change_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
         .layer(axum::extract::DefaultBodyLimit::max(256_000));
     Ok(router)
@@ -624,10 +714,25 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
         .pointer("/data/object")
         .cloned()
         .unwrap_or(Value::Null);
-    let input = match stripe_event_input(event_type, &object) {
+    let mut input = match stripe_event_input(event_type, &object) {
         Ok(input) => input,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
+    let live = state.secret_key.starts_with("sk_live_") || state.secret_key.starts_with("rk_live_");
+    if event
+        .get("livemode")
+        .and_then(Value::as_bool)
+        .is_some_and(|mode| mode != live)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if event_type == "invoice.paid" {
+        match paid_invoice_plan(&object, &state.prices) {
+            Ok(Some(paid)) => input = paid,
+            Ok(None) => {} // Compatibility with pre-price legacy event fixtures.
+            Err(()) => return StatusCode::BAD_REQUEST.into_response(),
+        }
+    }
     match state
         .store
         .lock()
@@ -638,7 +743,59 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
         Ok(false) => {}
         Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+    let mut ignore_paid_invoice = false;
+    if let StripeEventInput::InvoicePaidPlan {
+        subscription_id,
+        paid,
+        ..
+    } = &mut input
+    {
+        let previous = match state.store.lock().map_err(|_| ()).and_then(|db| {
+            db.stripe_paid_invoice_stamp(subscription_id)
+                .map_err(|_| ())
+        }) {
+            Ok(value) => value,
+            Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        if let Some((previous_id, issued, previous_plan)) = previous
+            && issued == paid.issued_at
+            && previous_plan != paid.plan
+            && previous_id != paid.invoice_id
+        {
+            let value = match state.subscription_lookup.retrieve(subscription_id).await {
+                Ok(value) => value,
+                Err(()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            let customer = object
+                .get("customer")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let latest = value
+                .get("latest_invoice")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/latest_invoice/id").and_then(Value::as_str));
+            if value.get("id").and_then(Value::as_str) != Some(subscription_id.as_str())
+                || value.get("customer").and_then(Value::as_str) != Some(customer)
+                || value.get("livemode").and_then(Value::as_bool) != Some(live)
+            {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            if latest == Some(previous_id.as_str()) {
+                ignore_paid_invoice = true;
+            } else if latest == Some(paid.invoice_id.as_str()) {
+                paid.canonical_previous_invoice = Some(previous_id);
+            } else {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        }
+    }
+    if ignore_paid_invoice {
+        input = StripeEventInput::Ignored;
+    }
     let recovered = if let StripeEventInput::InvoicePaid {
+        subscription_id, ..
+    }
+    | StripeEventInput::InvoicePaidPlan {
         subscription_id, ..
     } = &input
     {
@@ -676,10 +833,23 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
             else {
                 return StatusCode::BAD_REQUEST.into_response();
             };
-            let value = match state.subscription_lookup.retrieve(subscription_id).await {
+            let mut value = match state.subscription_lookup.retrieve(subscription_id).await {
                 Ok(value) => value,
                 Err(()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
             };
+            if matches!(input, StripeEventInput::InvoicePaidPlan { .. }) {
+                // Portal changes do not rewrite Checkout metadata. Only the configured Price
+                // identifies today's plan; the immutable Discord identity still comes from Stripe.
+                let Some((plan, seats)) = value
+                    .pointer("/items/data/0/price/id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| state.prices.plan_for_price(id))
+                else {
+                    return StatusCode::BAD_REQUEST.into_response();
+                };
+                value["metadata"]["plan"] = json!(plan);
+                value["metadata"]["seats"] = json!(seats.to_string());
+            }
             let Some(recovered) = recovered_subscription(&value, subscription_id, customer, &state)
             else {
                 return StatusCode::BAD_REQUEST.into_response();
@@ -705,6 +875,100 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
         }
         Err(()) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// Select the charged recurring line, not a negative credit for the previous plan. Reject
+/// truncated/ambiguous invoices rather than guessing from line zero or stale metadata.
+fn paid_invoice_plan(
+    object: &Value,
+    prices: &StripePriceIds,
+) -> Result<Option<StripeEventInput>, ()> {
+    let lines = object
+        .pointer("/lines/data")
+        .and_then(Value::as_array)
+        .ok_or(())?;
+    if !lines
+        .iter()
+        .any(|line| line.get("price").is_some() || line.get("pricing").is_some())
+    {
+        return Ok(None);
+    }
+    if object.pointer("/lines/has_more").and_then(Value::as_bool) == Some(true)
+        || object.get("status").and_then(Value::as_str) != Some("paid")
+        || object.get("paid").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(());
+    }
+    let subscription = invoice_subscription_id(object).map_err(|_| ())?;
+    let mut selected = None;
+    for line in lines {
+        if line.get("amount").and_then(Value::as_i64).ok_or(())? < 0 {
+            continue;
+        }
+        let price = line
+            .pointer("/price/id")
+            .and_then(Value::as_str)
+            .or_else(|| line.get("price").and_then(Value::as_str))
+            .or_else(|| {
+                line.pointer("/pricing/price_details/price")
+                    .and_then(Value::as_str)
+            })
+            .ok_or(())?;
+        let (plan, seats) = prices.plan_for_price(price).ok_or(())?;
+        if line.get("quantity").and_then(Value::as_i64) != Some(1) {
+            return Err(());
+        }
+        if let Some(parent) = line.get("parent").filter(|value| !value.is_null()) {
+            if parent.get("type").and_then(Value::as_str) != Some("subscription_item_details")
+                || parent
+                    .pointer("/subscription_item_details/subscription")
+                    .and_then(Value::as_str)
+                    != Some(subscription)
+            {
+                return Err(());
+            }
+        } else if line.get("type").and_then(Value::as_str) != Some("subscription") {
+            return Err(());
+        }
+        let starts_at = line
+            .pointer("/period/start")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .and_then(stripe_period_end_ms)
+            .ok_or(())?;
+        let period_end = line
+            .pointer("/period/end")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .and_then(stripe_period_end_ms)
+            .ok_or(())?;
+        if selected.is_some() || starts_at >= period_end {
+            return Err(());
+        }
+        selected = Some(StripeEventInput::InvoicePaidPlan {
+            subscription_id: subscription.into(),
+            period_end: Some(period_end),
+            paid: StripePaidPlan {
+                invoice_id: object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or(())?
+                    .into(),
+                issued_at: object
+                    .get("created")
+                    .and_then(Value::as_i64)
+                    .filter(|v| *v > 0)
+                    .and_then(stripe_period_end_ms)
+                    .ok_or(())?,
+                starts_at,
+                plan: plan.into(),
+                seats,
+                canonical_previous_invoice: None,
+            },
+        });
+    }
+    selected.map(Some).ok_or(())
 }
 
 fn recovered_subscription(

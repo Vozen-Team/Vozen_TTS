@@ -26,6 +26,13 @@ use vozen_store::{
 
 const ACTIVATION_TTL_SECONDS: i64 = 30;
 
+fn activation_within_limit(activations: &[String], seats: i64, guild_id: &str) -> bool {
+    activations
+        .iter()
+        .take(usize::try_from(seats).unwrap_or(0))
+        .any(|id| id == guild_id)
+}
+
 #[derive(Clone)]
 pub struct PremiumGatewaySink {
     store: Arc<Mutex<SqliteStore>>,
@@ -366,7 +373,7 @@ impl PremiumGatewaySink {
         let (content, row) = {
             let store = self.store.lock().map_err(|_| GatewayEventDispatchError)?;
             let Some(pass) = store
-                .premium_pass(&user_id)
+                .premium_pass_at(&user_id, now)
                 .map_err(|_| GatewayEventDispatchError)?
             else {
                 if !self.payments_enabled {
@@ -395,7 +402,7 @@ impl PremiumGatewaySink {
             let activations = store
                 .pass_activations(&user_id)
                 .map_err(|_| GatewayEventDispatchError)?;
-            if activations.iter().any(|id| id == &guild_id) {
+            if activation_within_limit(&activations, pass.seats, &guild_id) {
                 return Ok(CreateInteractionResponseMessage::new()
                     .content(self.message("premium.alreadyActive", command, &BTreeMap::new())?)
                     .ephemeral(true));
@@ -788,6 +795,16 @@ mod tests {
             .map(|grant| (grant.kind, grant.id)),
             Some((PremiumKind::User, "user".into()))
         );
+    }
+
+    #[test]
+    fn saved_associations_outside_the_downgraded_limit_are_not_reported_active() {
+        let activations = vec!["oldest".into(), "second".into(), "third".into()];
+        assert!(activation_within_limit(&activations, 2, "oldest"));
+        assert!(activation_within_limit(&activations, 2, "second"));
+        assert!(!activation_within_limit(&activations, 2, "third"));
+        assert!(!activation_within_limit(&activations, 0, "oldest"));
+        assert!(!activation_within_limit(&activations, -1, "oldest"));
     }
 
     #[test]
