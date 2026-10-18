@@ -268,7 +268,7 @@ def cleanup_old_images(current, rollback):
             continue
         # Removing an ID without --force lets Docker refuse newly referenced or multiply
         # tagged images. Never untag by name: an operator could have moved that tag.
-        docker("image", "rm", image)
+        docker("image", "rm", "--no-prune", image)
         removed += 1
     require(retention_guard(current, rollback) == container_id,
             "runtime changed after image retention")

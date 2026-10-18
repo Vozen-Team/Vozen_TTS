@@ -42,7 +42,8 @@ manual runtime change requires operator reconciliation of state. Broker errors
 do not disclose bearer tokens, configuration, user messages or Docker output.
 
 After a healthy cutover and atomic state write, old `vozen-rust` images are
-removed by exact digest, without force or global pruning. The verified current
+removed by exact digest with `--no-prune`, without force or global pruning. Untagged
+parent images are not removed as a side effect. The verified current
 image, broker-pinned rollback and every image referenced by a running or stopped
 container are preserved. Images with another repository alias, no identifying
 revision label or ambiguous metadata are retained. Docker may refuse an image
