@@ -520,6 +520,13 @@ exit 64`,
     expect(deploy).not.toContain('STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}');
     expect(deploy).not.toMatch(/^\s*envs:\s*.*STRIPE_/m);
   });
+  it('binds the owner console to the Helper OAuth application in production', () => {
+    const productionEnv = source('.env.rust.prod.example');
+    expect(productionEnv).toContain('ADMIN_CLIENT_ID=1526211106081734666');
+    expect(productionEnv).toContain(
+      'ADMIN_PANEL_ORIGIN=https://rexy40407.github.io',
+    );
+  });
   it('keeps the Night Signal treatment scoped to Discord entry points', () => {
     const css = source(SITE_CSS);
     const index = source('site/index.html');
