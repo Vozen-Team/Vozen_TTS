@@ -1,7 +1,7 @@
 //! Isolated QA fixtures: no Stripe calls, real credentials, or production database.
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -71,6 +71,13 @@ fn fixture() -> (Router, Arc<Mutex<SqliteStore>>) {
 fn fixture_with_lookup(
     value: Option<Value>,
 ) -> (Router, Arc<Mutex<SqliteStore>>, Arc<AtomicUsize>) {
+    fixture_with_clock(value, Arc::new(AtomicI64::new(NOW)))
+}
+
+fn fixture_with_clock(
+    value: Option<Value>,
+    clock: Arc<AtomicI64>,
+) -> (Router, Arc<Mutex<SqliteStore>>, Arc<AtomicUsize>) {
     let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
     let price = "price_isolated_fixture".to_string();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -82,15 +89,15 @@ fn fixture_with_lookup(
             webhook_secret: SECRET.into(),
             prices: StripePriceIds {
                 plus_monthly: price.clone(),
-                plus_yearly: price.clone(),
-                premium_monthly: price.clone(),
-                premium_yearly: price.clone(),
-                max_monthly: price.clone(),
-                max_yearly: price,
+                plus_yearly: "price_plus_yearly".into(),
+                premium_monthly: "price_premium_monthly".into(),
+                premium_yearly: "price_premium_yearly".into(),
+                max_monthly: "price_max_monthly".into(),
+                max_yearly: "price_max_yearly".into(),
             },
             store: store.clone(),
             identity_verifier: Arc::new(NoIdentity),
-            now: Arc::new(|| NOW),
+            now: Arc::new(move || clock.load(Ordering::SeqCst)),
         },
         Arc::new(Lookup {
             value,
@@ -124,7 +131,11 @@ fn invoice(id: &str, end: i64) -> Value {
 }
 
 fn signature(body: &[u8]) -> String {
-    let timestamp = NOW / 1000;
+    signature_at(body, NOW)
+}
+
+fn signature_at(body: &[u8], now: i64) -> String {
+    let timestamp = now / 1000;
     let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
     mac.update(format!("{timestamp}.").as_bytes());
     mac.update(body);
@@ -138,17 +149,371 @@ fn signature(body: &[u8]) -> String {
 }
 
 async fn send(app: &Router, value: Value) -> StatusCode {
+    send_at(app, value, NOW).await
+}
+
+async fn send_at(app: &Router, value: Value, now: i64) -> StatusCode {
     let body = serde_json::to_vec(&value).unwrap();
     app.clone()
         .oneshot(
             Request::post("/webhook/stripe")
-                .header("stripe-signature", signature(&body))
+                .header("stripe-signature", signature_at(&body, now))
                 .body(Body::from(body))
                 .unwrap(),
         )
         .await
         .unwrap()
         .status()
+}
+
+fn priced_invoice(id: &str, plan: &str, start: i64, end: i64) -> Value {
+    let price = match plan {
+        "plus" => "price_isolated_fixture",
+        "premium" => "price_premium_monthly",
+        "max" => "price_max_monthly",
+        _ => panic!("test plan"),
+    };
+    event(
+        &format!("evt_{id}"),
+        "invoice.paid",
+        json!({"id":id,"subscription":"sub_qa","customer":"cus_qa",
+        "status":"paid","paid":true,"created":start/1000,
+        "lines":{"has_more":false,"data":[{"amount":699,"quantity":1,
+            "parent":{"type":"subscription_item_details","subscription_item_details":{"subscription":"sub_qa"}},
+            "pricing":{"type":"price_details","price_details":{"price":price}},
+            "period":{"start":start/1000,"end":end/1000}}]}}),
+    )
+}
+
+#[tokio::test]
+async fn all_paid_upgrades_and_period_end_downgrades_reconcile_exact_seats() {
+    for (before, after) in [
+        ("plus", "premium"),
+        ("plus", "max"),
+        ("premium", "max"),
+        ("max", "premium"),
+        ("premium", "plus"),
+        ("max", "plus"),
+    ] {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let (app, store, _) = fixture_with_clock(Some(provider_subscription()), clock.clone());
+        assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+        assert_eq!(
+            send(
+                &app,
+                priced_invoice("in_initial", before, NOW, NOW + 30 * DAY)
+            )
+            .await,
+            StatusCode::OK
+        );
+        if before != "plus" {
+            for index in 0..if before == "max" { 5 } else { 2 } {
+                store
+                    .lock()
+                    .unwrap()
+                    .activate_seat("user_qa", &format!("guild_{index}"), NOW)
+                    .unwrap();
+            }
+        }
+        let downgrade = (if before == "max" {
+            5
+        } else if before == "premium" {
+            2
+        } else {
+            1
+        }) > (if after == "max" {
+            5
+        } else if after == "premium" {
+            2
+        } else {
+            1
+        });
+        let unpaid = event(
+            "evt_unpaid_change",
+            "customer.subscription.updated",
+            json!({"id":"sub_qa","status":"active","current_period_end":(NOW+30*DAY)/1000,
+            "items":{"data":[{"quantity":1,"price":{"id":"price_max_monthly"}}]}}),
+        );
+        assert_eq!(send(&app, unpaid).await, StatusCode::OK);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .stripe_subscription("sub_qa")
+                .unwrap()
+                .unwrap()
+                .plan,
+            before
+        );
+        let change_at = if downgrade { NOW + 30 * DAY } else { NOW + DAY };
+        clock.store(change_at, Ordering::SeqCst);
+        let end = if downgrade {
+            NOW + 60 * DAY
+        } else {
+            NOW + 30 * DAY
+        };
+        let changed = priced_invoice("in_changed", after, change_at, end);
+        assert_eq!(
+            send_at(&app, changed.clone(), change_at).await,
+            StatusCode::OK,
+            "{before}->{after}"
+        );
+        assert_eq!(send_at(&app, changed, change_at).await, StatusCode::OK);
+        let db = store.lock().unwrap();
+        let status = db.premium_status("user_qa", change_at).unwrap();
+        assert_eq!(status.plus_active, after == "plus", "{before}->{after}");
+        assert_eq!(
+            status.pass.as_ref().map(|pass| pass.seats),
+            match after {
+                "max" => Some(5),
+                "premium" => Some(2),
+                _ => None,
+            }
+        );
+        if before == "max" && after == "premium" {
+            assert_eq!(
+                status.pass.as_ref().unwrap().used,
+                2,
+                "only licensed associations count as used"
+            );
+            assert_eq!(status.pass.as_ref().unwrap().guilds.len(), 2);
+            assert_eq!(status.pass.as_ref().unwrap().inactive_guilds.len(), 3);
+            assert!(db.is_guild_premium("guild_0", change_at).unwrap());
+            assert!(db.is_guild_premium("guild_1", change_at).unwrap());
+            assert!(!db.is_guild_premium("guild_2", change_at).unwrap());
+            assert!(
+                db.resolve_guild_pass_owner("guild_2", change_at)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                db.activate_seat("user_qa", "guild_2", change_at)
+                    .unwrap()
+                    .status,
+                vozen_store::ActivateStatus::NoSeats,
+                "a saved over-limit association is not active"
+            );
+            assert_eq!(
+                db.pass_activations("user_qa").unwrap().len(),
+                5,
+                "associations are preserved"
+            );
+        }
+        if after == "plus" {
+            assert!(!db.is_guild_premium("guild_0", change_at).unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn failed_upgrade_and_early_paid_downgrade_do_not_change_access() {
+    let (app, store) = fixture();
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    assert_eq!(
+        send(
+            &app,
+            priced_invoice("in_max", "max", NOW - DAY, NOW + 30 * DAY)
+        )
+        .await,
+        StatusCode::OK
+    );
+    let failed = event(
+        "evt_failed_upgrade",
+        "invoice.payment_failed",
+        json!({"subscription":"sub_qa"}),
+    );
+    assert_eq!(send(&app, failed).await, StatusCode::OK);
+    assert_eq!(
+        send(
+            &app,
+            priced_invoice("in_early_downgrade", "premium", NOW, NOW + 30 * DAY)
+        )
+        .await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let db = store.lock().unwrap();
+    assert_eq!(
+        db.premium_status("user_qa", NOW)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        5
+    );
+    assert!(!db.stripe_event_processed("evt_in_early_downgrade").unwrap());
+}
+
+#[tokio::test]
+async fn delayed_invoice_cannot_undo_upgrade_and_negative_proration_is_not_new_plan() {
+    let (app, store) = fixture();
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    let old = priced_invoice("in_old", "plus", NOW - DAY, NOW + 30 * DAY);
+    assert_eq!(send(&app, old.clone()).await, StatusCode::OK);
+    let mut upgraded = priced_invoice("in_upgrade", "max", NOW, NOW + 30 * DAY);
+    let mut credit = old["data"]["object"]["lines"]["data"][0].clone();
+    credit["amount"] = json!(-399);
+    upgraded["data"]["object"]["lines"]["data"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, credit);
+    assert_eq!(send(&app, upgraded).await, StatusCode::OK);
+    let mut replay = old;
+    replay["id"] = json!("evt_old_new_delivery");
+    assert_eq!(send(&app, replay).await, StatusCode::OK);
+    let db = store.lock().unwrap();
+    assert!(!db.is_user_premium("user_qa", NOW).unwrap());
+    assert_eq!(
+        db.premium_status("user_qa", NOW)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        5
+    );
+}
+
+#[tokio::test]
+async fn independent_grants_survive_plan_changes_without_lending_expired_seats() {
+    let (app, store) = fixture();
+    store
+        .lock()
+        .unwrap()
+        .grant_user_premium("user_qa", 90, "manual", NOW)
+        .unwrap();
+    store
+        .lock()
+        .unwrap()
+        .grant_guild_pass("user_qa", 2, 90, "kofi", NOW)
+        .unwrap();
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    assert_eq!(
+        send(
+            &app,
+            priced_invoice("in_paid_max", "max", NOW, NOW + 30 * DAY)
+        )
+        .await,
+        StatusCode::OK
+    );
+    let db = store.lock().unwrap();
+    assert!(db.is_user_premium("user_qa", NOW).unwrap());
+    assert_eq!(
+        db.premium_status("user_qa", NOW)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        5
+    );
+    assert_eq!(
+        db.premium_status("user_qa", NOW + 31 * DAY)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        2
+    );
+    assert_eq!(
+        db.user_premium_expiry("user_qa").unwrap(),
+        Some(NOW + 90 * DAY)
+    );
+}
+
+#[tokio::test]
+async fn new_paid_projection_preserves_unattributed_legacy_stripe_rights_until_expiry() {
+    let (app, store) = fixture();
+    // Legacy aggregates cannot identify which of several subscriptions paid for a grant.
+    store
+        .lock()
+        .unwrap()
+        .grant_guild_pass("user_qa", 5, 10, "stripe", NOW)
+        .unwrap();
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    assert_eq!(
+        send(
+            &app,
+            priced_invoice("in_new_subscription", "premium", NOW, NOW + 30 * DAY)
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .premium_status("user_qa", NOW)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        5
+    );
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .premium_status("user_qa", NOW + 11 * DAY)
+            .unwrap()
+            .pass
+            .unwrap()
+            .seats,
+        2
+    );
+}
+
+#[tokio::test]
+async fn malformed_or_wrong_mode_plan_invoice_does_not_consume_event_or_grant() {
+    let cases = [
+        (
+            "/data/object/lines/data/0/pricing/price_details/price",
+            json!("price_unknown"),
+        ),
+        ("/data/object/lines/data/0/quantity", json!(2)),
+        ("/data/object/lines/has_more", json!(true)),
+        ("/data/object/status", json!("open")),
+        ("/data/object/customer", json!("cus_other")),
+        (
+            "/data/object/lines/data/0/parent/subscription_item_details/subscription",
+            json!("sub_other"),
+        ),
+        ("/livemode", json!(true)),
+    ];
+    for (pointer, value) in cases {
+        let (app, store) = fixture();
+        assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+        let mut paid = priced_invoice("in_bad", "max", NOW, NOW + 30 * DAY);
+        *paid.pointer_mut(pointer).unwrap() = value;
+        assert_eq!(send(&app, paid).await, StatusCode::BAD_REQUEST, "{pointer}");
+        let db = store.lock().unwrap();
+        assert!(!db.stripe_event_processed("evt_in_bad").unwrap());
+        assert!(db.premium_status("user_qa", NOW).unwrap().pass.is_none());
+    }
+}
+
+#[tokio::test]
+async fn paid_price_change_replaces_checkout_plan_without_granting_on_update() {
+    let (app, store) = fixture();
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    let mut paid = invoice("evt_paid_plan_change", NOW + 30 * DAY);
+    paid["data"]["object"]["created"] = json!(NOW / 1000);
+    paid["data"]["object"]["status"] = json!("paid");
+    paid["data"]["object"]["lines"]["data"][0]["type"] = json!("subscription");
+    paid["data"]["object"]["lines"]["data"][0]["price"] = json!({"id":"price_premium_monthly"});
+    paid["data"]["object"]["lines"]["data"][0]["amount"] = json!(699);
+    paid["data"]["object"]["lines"]["data"][0]["quantity"] = json!(1);
+    paid["data"]["object"]["lines"]["data"][0]["period"]["start"] = json!(NOW / 1000);
+    assert_eq!(send(&app, paid).await, StatusCode::OK);
+    let db = store.lock().unwrap();
+    let pass = db
+        .premium_status("user_qa", NOW)
+        .unwrap()
+        .pass
+        .expect("paid Premium pass");
+    assert_eq!(pass.seats, 2);
+    assert!(!db.is_user_premium("user_qa", NOW).unwrap());
+    assert_eq!(
+        db.stripe_subscription("sub_qa").unwrap().unwrap().plan,
+        "premium"
+    );
 }
 
 #[tokio::test]
@@ -353,6 +718,9 @@ async fn recovered_cancellation_survives_late_checkout() {
 async fn unauthenticated_checkout_paths_do_not_create_provider_sessions() {
     let (app, _) = fixture();
     for path in [
+        "/api/billing/plans",
+        "/api/billing/change/preview",
+        "/api/billing/change/confirm",
         "/api/billing/checkout",
         "/api/billing/checkout/elements",
         "/api/billing/portal",

@@ -4163,6 +4163,29 @@ body.page-account .ppanel__logoutaction:active {
   }
 }
 
+/* Native dialog supplies focus containment and Escape handling. */
+.plan-change {
+  position: fixed !important; /* Override the site's body-child stacking rule. */
+  inset: 0;
+  margin: auto;
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: 90dvh;
+  overflow: auto;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  color: #f1f1f8;
+  background: #11111c;
+  border: 1px solid #343447;
+  border-radius: 1rem;
+}
+.plan-change::backdrop { background: rgb(0 0 0 / 75%); }
+.plan-change form { display: grid; gap: 0.8rem; }
+.plan-change h2, .plan-change p { margin: 0; }
+.plan-change p { line-height: 1.6; color: #c0c0d3; white-space: pre-line; }
+.plan-change select { width: 100%; min-height: 2.75rem; padding: 0.6rem; background: #1b1b29; color: inherit; border: 1px solid #55556b; border-radius: 0.5rem; font: inherit; }
+.plan-change__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; margin-top: 0.5rem; }
+.plan-change button[hidden] { display: none; }
+.plan-change :focus-visible { outline: 2px solid #aaa0ff; outline-offset: 3px; }
+
 /* Discord avatars are circular at every account breakpoint. Keep this final so
    the compact layout rules above can resize the avatar without reshaping it. */
 body.page-account .ppanel__av {

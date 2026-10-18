@@ -99,6 +99,11 @@
     },
     {
       "type": "table",
+      "name": "stripe_paid_entitlement",
+      "sql": "CREATE TABLE stripe_paid_entitlement (subscription_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, invoice_id TEXT NOT NULL, issued_at INTEGER NOT NULL, starts_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, plan TEXT NOT NULL CHECK(plan IN ('plus','premium','max')), seats INTEGER NOT NULL CHECK(seats IN (1,2,5)))"
+    },
+    {
+      "type": "table",
       "name": "operational_daily_metric",
       "sql": "CREATE TABLE operational_daily_metric (\n        day      TEXT NOT NULL,\n        metric   TEXT NOT NULL,\n        provider TEXT NOT NULL,\n        value    INTEGER NOT NULL DEFAULT 0,\n        PRIMARY KEY (day, metric, provider)\n      )"
     },

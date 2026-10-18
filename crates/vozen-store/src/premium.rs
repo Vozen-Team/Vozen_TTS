@@ -7,6 +7,17 @@ pub const DAY_MS: i64 = 86_400_000;
 /// The current Top.gg Plus reward duration. It is an existing entitlement source, not a payment.
 pub const VOTE_REWARD_MS: i64 = 48 * 60 * 60 * 1_000;
 
+// Stripe's paid projection is separate from manual/Ko-fi grants. Legacy aggregates have no
+// subscription provenance: retain their original paid-through time rather than attributing
+// them to (and revoking them with) an unrelated subscription. Nothing extends them here.
+pub(crate) const PASS_SOURCES: &str = "WITH pass_sources AS (
+    SELECT user_id,seats,expires_at,source FROM premium_pass
+    UNION ALL SELECT user_id,seats,expires_at,'stripe' FROM stripe_paid_entitlement WHERE plan IN ('premium','max')
+) ";
+const SEAT_COVERED: &str = "(SELECT COUNT(*) FROM premium_pass_activation a
+    WHERE a.user_id=activation.user_id AND (a.activated_at < activation.activated_at
+    OR (a.activated_at=activation.activated_at AND a.guild_id <= activation.guild_id))) <= pass.seats";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PremiumKind {
     Guild,
@@ -103,6 +114,7 @@ pub struct PremiumPassStatus {
     pub expires_at: i64,
     pub active: bool,
     pub guilds: Vec<String>,
+    pub inactive_guilds: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,32 +126,12 @@ pub struct GuildPassOwner {
 impl SqliteStore {
     /// Direct guild Premium, current Discord entitlement, or an unexpired activated pass.
     pub fn is_guild_premium(&self, guild_id: &str, now: i64) -> Result<bool, StoreError> {
-        let direct_or_discord: Option<i64> = self.connection().query_row(
-            "SELECT MAX(expires_at) FROM (
-                SELECT expires_at FROM premium_guild WHERE guild_id = ?1
-                UNION ALL
-                SELECT expires_at FROM discord_premium_entitlement
-                WHERE kind = 'guild' AND target_id = ?1
-             )",
-            [guild_id],
-            |row| row.get(0),
-        )?;
-        if direct_or_discord.is_some_and(|expiry| expiry > now) {
-            return Ok(true);
-        }
-        let has_active_pass: bool = self.connection().query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM premium_pass_activation activation
-                JOIN premium_pass pass ON pass.user_id = activation.user_id
-                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
-             )",
-            params![guild_id, now],
-            |row| row.get::<_, i64>(0),
-        )? != 0;
-        Ok(has_active_pass)
+        Ok(self
+            .effective_guild_premium_expiry(guild_id, now)?
+            .is_some())
     }
 
-    /// User Plus comes from a direct grant, the 48-hour vote reward, or Discord entitlement.
+    /// User Plus comes from independent grants, paid Stripe periods, votes, or Discord.
     pub fn is_user_premium(&self, user_id: &str, now: i64) -> Result<bool, StoreError> {
         Ok(self
             .user_premium_expiry(user_id)?
@@ -166,7 +158,8 @@ impl SqliteStore {
     ) -> Result<Option<i64>, StoreError> {
         self.connection()
             .query_row(
-                "SELECT MAX(expiry) FROM (
+                &format!(
+                    "{PASS_SOURCES} SELECT MAX(expiry) FROM (
                 SELECT expires_at AS expiry FROM premium_guild
                 WHERE guild_id = ?1 AND expires_at > ?2
                 UNION ALL
@@ -174,9 +167,10 @@ impl SqliteStore {
                 WHERE kind = 'guild' AND target_id = ?1 AND expires_at > ?2
                 UNION ALL
                 SELECT pass.expires_at FROM premium_pass_activation activation
-                JOIN premium_pass pass ON pass.user_id = activation.user_id
-                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
-             )",
+                JOIN pass_sources pass ON pass.user_id = activation.user_id
+                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2 AND {SEAT_COVERED}
+             )"
+                ),
                 params![guild_id, now],
                 |row| row.get(0),
             )
@@ -189,6 +183,7 @@ impl SqliteStore {
             .query_row(
                 "SELECT MAX(expires_at) FROM (
                 SELECT expires_at FROM premium_user WHERE user_id = ?1
+                UNION ALL SELECT expires_at FROM stripe_paid_entitlement WHERE user_id=?1 AND plan='plus'
                 UNION ALL
                 SELECT rewarded_at + ?2 AS expires_at FROM vote_reward WHERE user_id = ?1
                 UNION ALL
@@ -222,10 +217,21 @@ impl SqliteStore {
     }
 
     pub fn premium_pass(&self, user_id: &str) -> Result<Option<PremiumPass>, StoreError> {
+        self.premium_pass_at(user_id, i64::MIN)
+    }
+
+    /// Effective source at the authorization time. An expired higher tier cannot lend its
+    /// seats to an independent, lower-tier grant that expires later.
+    pub fn premium_pass_at(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> Result<Option<PremiumPass>, StoreError> {
         self.connection()
             .query_row(
-                "SELECT seats, expires_at, source FROM premium_pass WHERE user_id = ?1",
-                [user_id],
+                &format!("{PASS_SOURCES} SELECT seats,expires_at,source FROM pass_sources WHERE user_id=?1
+                    ORDER BY (expires_at > ?2) DESC,seats DESC,expires_at DESC LIMIT 1"),
+                params![user_id,now],
                 |row| {
                     Ok(PremiumPass {
                         seats: row.get(0)?,
@@ -240,7 +246,7 @@ impl SqliteStore {
 
     pub fn pass_activations(&self, user_id: &str) -> Result<Vec<String>, StoreError> {
         let mut statement = self.connection().prepare(
-            "SELECT guild_id FROM premium_pass_activation WHERE user_id = ?1 ORDER BY activated_at",
+            "SELECT guild_id FROM premium_pass_activation WHERE user_id = ?1 ORDER BY activated_at, guild_id",
         )?;
         statement
             .query_map([user_id], |row| row.get(0))?
@@ -267,12 +273,15 @@ impl SqliteStore {
     ) -> Result<Option<GuildPassOwner>, StoreError> {
         self.connection()
             .query_row(
-                "SELECT activation.user_id, pass.seats
+                &format!(
+                    "{PASS_SOURCES} SELECT activation.user_id, MAX(pass.seats)
                  FROM premium_pass_activation activation
-                 JOIN premium_pass pass ON pass.user_id = activation.user_id
-                 WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
-                 ORDER BY activation.activated_at ASC
-                 LIMIT 1",
+                 JOIN pass_sources pass ON pass.user_id = activation.user_id
+                 WHERE activation.guild_id = ?1 AND pass.expires_at > ?2 AND {SEAT_COVERED}
+                 GROUP BY activation.user_id
+                 ORDER BY activation.activated_at ASC,activation.user_id ASC
+                 LIMIT 1"
+                ),
                 params![guild_id, now],
                 |row| {
                     Ok(GuildPassOwner {
@@ -305,7 +314,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<ActivateResult, StoreError> {
         let transaction = self.connection().unchecked_transaction()?;
-        let pass = premium_pass_from(&transaction, user_id)?;
+        let pass = self.premium_pass_at(user_id, now)?;
         let result = match pass {
             None => ActivateResult::without_pass(ActivateStatus::NoPass),
             Some(pass) if pass.expires_at <= now => ActivateResult::expired(&pass),
@@ -316,7 +325,20 @@ impl SqliteStore {
                     params![user_id, guild_id], |row| row.get::<_, i64>(0),
                 )? != 0;
                 if already {
-                    ActivateResult::with_pass(ActivateStatus::Already, &pass, used)
+                    let covered:bool=transaction.query_row(
+                        &format!("SELECT {SEAT_COVERED} FROM premium_pass_activation activation
+                            CROSS JOIN (SELECT ?3 AS seats) pass WHERE activation.user_id=?1 AND activation.guild_id=?2"),
+                        params![user_id,guild_id,pass.seats],|row|row.get(0),
+                    )?;
+                    ActivateResult::with_pass(
+                        if covered {
+                            ActivateStatus::Already
+                        } else {
+                            ActivateStatus::NoSeats
+                        },
+                        &pass,
+                        used,
+                    )
                 } else if used >= pass.seats {
                     ActivateResult::with_pass(ActivateStatus::NoSeats, &pass, used)
                 } else {
@@ -342,16 +364,22 @@ impl SqliteStore {
     pub fn premium_status(&self, user_id: &str, now: i64) -> Result<PremiumStatusView, StoreError> {
         let plus_expires_at = self.user_premium_expiry(user_id)?;
         let pass = self
-            .premium_pass(user_id)?
+            .premium_pass_at(user_id, now)?
             .map(|pass| {
-                let used = self.active_seat_count(user_id)?;
-                let guilds = self.pass_activations(user_id)?;
+                let mut guilds = self.pass_activations(user_id)?;
+                let used = if pass.expires_at > now {
+                    guilds.len().min(pass.seats.max(0) as usize)
+                } else {
+                    0
+                };
+                let inactive_guilds = guilds.split_off(used);
                 Ok::<PremiumPassStatus, StoreError>(PremiumPassStatus {
                     seats: pass.seats,
-                    used,
+                    used: used as i64,
                     expires_at: pass.expires_at,
                     active: pass.expires_at > now,
                     guilds,
+                    inactive_guilds,
                 })
             })
             .transpose()?;

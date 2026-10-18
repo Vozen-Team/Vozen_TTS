@@ -1145,6 +1145,13 @@
         servers = `<p class="ppanel__meta">${t("panel.noServers")}</p>`;
       }
     }
+    if (pass && pass.inactiveServers && pass.inactiveServers.length) {
+      const label = lang === "pt" ? "Ligações guardadas (sem licença ativa)" : "Saved links (no active license)";
+      const items = pass.inactiveServers
+        .map((s) => `<li>${s.name ? esc(s.name) : "<code>" + esc(s.id) + "</code>"}</li>`)
+        .join("");
+      servers += `<div class="ppanel__servers"><span class="ppanel__meta">${label}</span><ul>${items}</ul></div>`;
+    }
     return (
       `<div class="ppanel__account">` +
       `<div class="ppanel__user">${av}</div>` +
@@ -1743,6 +1750,143 @@
   document
     .getElementById("accountActivateOpen")
     ?.addEventListener("click", openPurchaseActivation);
+
+  const planDialog = document.getElementById("planChangeDialog");
+  if (planDialog) {
+    const node = (id) => document.getElementById("planChange" + id);
+    const copy = (key) => {
+      const en = {
+        title: "Change plan", policy: "Upgrades require payment. Downgrades and yearly-to-monthly changes start when your current paid period ends.",
+        subtitle: "Preview an upgrade or schedule a downgrade",
+        subscription: "Subscription", plan: "New plan", interval: "Billing interval", monthly: "Monthly", yearly: "Yearly",
+        preview: "Preview change", close: "Close", loading: "Loading your subscriptions…",
+        empty: "No eligible active Stripe subscription. You can still manage billing through the Stripe portal.",
+        error: "The change could not be confirmed. Open billing management and check for a pending payment before trying again.",
+        choose: "Choose a different plan or billing interval.", pay: "Confirm and pay", schedule: "Schedule change",
+        next: "New recurring price", due: "Due now", effective: "Starts on", pending: "Stripe is confirming your payment. Access updates after payment succeeds.",
+        scheduled: "Change scheduled. Your current paid access remains until", seats: "On a smaller server plan, the oldest linked servers keep access up to the new limit. Other server links stay saved.",
+        personal: "Plus covers your account, not server licenses. Stripe server access ends on that date; independent benefits remain.",
+      };
+      const pt = {
+        title: "Trocar de plano", policy: "Os upgrades exigem pagamento. Os downgrades e as trocas de anual para mensal começam no fim do período já pago.",
+        subtitle: "Pré-visualiza um upgrade ou agenda um downgrade",
+        subscription: "Subscrição", plan: "Novo plano", interval: "Periodicidade", monthly: "Mensal", yearly: "Anual",
+        preview: "Pré-visualizar troca", close: "Fechar", loading: "A carregar as tuas subscrições…",
+        empty: "Não há uma subscrição Stripe ativa elegível. Podes gerir a faturação no portal Stripe.",
+        error: "Não foi possível confirmar a troca. Abre a gestão de faturação e verifica se existe um pagamento pendente antes de tentar novamente.",
+        choose: "Escolhe outro plano ou outra periodicidade.", pay: "Confirmar e pagar", schedule: "Agendar troca",
+        next: "Novo preço recorrente", due: "A pagar agora", effective: "Começa em", pending: "A Stripe está a confirmar o pagamento. O acesso muda após o pagamento ter sucesso.",
+        scheduled: "Troca agendada. Manténs o acesso já pago até", seats: "Num plano com menos servidores, os servidores associados há mais tempo mantêm o acesso até ao novo limite. As restantes associações ficam guardadas.",
+        personal: "O Plus cobre a tua conta, não licenças de servidor. O acesso Stripe dos servidores termina nessa data; os benefícios independentes mantêm-se.",
+      };
+      return (lang.startsWith("pt") ? pt : en)[key];
+    };
+    let quote = null;
+    let busy = false;
+    let subscriptions = [];
+    const status = (message) => { node("Status").textContent = message; };
+    const resetQuote = () => {
+      quote = null;
+      node("Preview").hidden = false;
+      node("Confirm").hidden = true;
+      node("Confirm").disabled = true;
+    };
+    const setBusy = (value) => {
+      busy = value;
+      ["Subscription", "Plan", "Interval", "Preview", "Close"].forEach((id) => {
+        node(id).disabled = value || (["Subscription", "Plan", "Interval"].includes(id) && !subscriptions.length);
+      });
+      node("Preview").disabled = value || !subscriptions.length;
+      node("Confirm").disabled = value || !quote;
+    };
+    async function planApi(route, body = {}) {
+      const token = storedToken();
+      if (!token) throw new Error("login required");
+      const response = await fetch(PREMIUM_API_BASE + "/api/billing/" + route, {
+        method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(45000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error("plan change unavailable");
+      return payload;
+    }
+    function selectCurrentSubscription() {
+      resetQuote();
+      const current = subscriptions.find((item) => item.id === node("Subscription").value);
+      if (current) { node("Plan").value = current.plan; node("Interval").value = current.interval; }
+      status(copy("choose"));
+    }
+    const trigger = document.getElementById("accountPlanChange");
+    trigger.querySelector("b").textContent = copy("title");
+    trigger.querySelector("small").textContent = copy("subtitle");
+    window.addEventListener("vozen:languagechange", () => {
+      trigger.querySelector("b").textContent = copy("title");
+      trigger.querySelector("small").textContent = copy("subtitle");
+    });
+    trigger.addEventListener("click", async () => {
+      if (!storedToken()) return login();
+      if (planDialog.open || busy) return;
+      node("Title").textContent = copy("title");
+      node("Policy").textContent = copy("policy");
+      node("Close").textContent = copy("close");
+      node("Preview").textContent = copy("preview");
+      ["Subscription", "Plan", "Interval"].forEach((id) => {
+        document.querySelector(`label[for="planChange${id}"]`).textContent = copy(id.toLowerCase());
+      });
+      [...node("Interval").options].forEach((option) => { option.textContent = copy(option.value); });
+      subscriptions = [];
+      node("Subscription").replaceChildren();
+      resetQuote(); setBusy(true); status(copy("loading")); planDialog.showModal();
+      try {
+        const payload = await planApi("plans");
+        subscriptions = (payload.subscriptions || []).filter((item) => item.changeable);
+        subscriptions.forEach((item, index) => {
+          const option = document.createElement("option");
+          option.value = item.id;
+          option.textContent = `${item.plan.toUpperCase()} / ${copy(item.interval)}${subscriptions.length > 1 ? ` (${index + 1})` : ""}`;
+          node("Subscription").append(option);
+        });
+        if (subscriptions.length) selectCurrentSubscription(); else status(copy("empty"));
+      } catch { status(copy("error")); }
+      finally { setBusy(false); }
+    });
+    node("Close").addEventListener("click", () => { if (!busy) planDialog.close(); });
+    planDialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
+    planDialog.addEventListener("close", resetQuote);
+    node("Subscription").addEventListener("change", selectCurrentSubscription);
+    ["Plan", "Interval"].forEach((id) => node(id).addEventListener("change", () => { resetQuote(); status(copy("choose")); }));
+    node("Form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (busy || !subscriptions.length) return;
+      resetQuote(); setBusy(true);
+      try {
+        quote = await planApi("change/preview", { subscription_id: node("Subscription").value, plan: node("Plan").value, interval: node("Interval").value });
+        const money = (cents) => new Intl.NumberFormat(lang, { style: "currency", currency: quote.currency }).format(cents / 100);
+        status(`${quote.plan.toUpperCase()}: ${copy("next")} ${money(quote.recurringAmount)} / ${copy(quote.interval)}.\n${quote.deferred ? `${copy("effective")} ${fmtDate(quote.effectiveAt * 1000)}.\n${copy(quote.plan === "plus" ? "personal" : "seats")}` : `${copy("due")} ${money(quote.amountDue)}.`}`);
+        node("Confirm").textContent = quote.deferred ? copy("schedule") : `${copy("pay")} ${money(quote.amountDue)}`;
+        node("Confirm").hidden = false;
+        node("Preview").hidden = true;
+      } catch { resetQuote(); status(copy("error")); }
+      finally { setBusy(false); }
+    });
+    node("Confirm").addEventListener("click", async () => {
+      if (busy || !quote) return;
+      const token = quote.token;
+      resetQuote(); setBusy(true);
+      try {
+        const result = await planApi("change/confirm", { token });
+        if (result.paymentUrl) {
+          const destination = new URL(result.paymentUrl);
+          if (destination.protocol !== "https:" || destination.hostname !== "invoice.stripe.com") throw new Error("unexpected payment URL");
+          window.location.assign(destination.href);
+        }
+        status(result.status === "scheduled" ? `${copy("scheduled")} ${fmtDate(result.effectiveAt * 1000)}.` : copy("pending"));
+        subscriptions = []; // Require a fresh read before another change.
+        void loadPanel();
+      } catch { status(copy("error")); subscriptions = []; }
+      finally { setBusy(false); }
+    });
+  }
 
   document.getElementById("accountBilling")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;

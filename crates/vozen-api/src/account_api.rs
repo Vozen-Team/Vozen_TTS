@@ -185,6 +185,8 @@ struct PassBody {
     expires_at: i64,
     active: bool,
     servers: Vec<GuildBody>,
+    #[serde(rename = "inactiveServers", skip_serializing_if = "Vec::is_empty")]
+    inactive_servers: Vec<GuildBody>,
 }
 
 #[derive(Serialize)]
@@ -217,22 +219,20 @@ fn account_body(
 }
 
 fn pass_body(pass: PremiumPassStatus, state: &AccountApiState) -> PassBody {
+    let resolve = |id: String| GuildBody {
+        name: state
+            .resolve_guild_name
+            .as_ref()
+            .and_then(|resolve| resolve(&id)),
+        id,
+    };
     PassBody {
         seats: pass.seats,
         used: pass.used,
         expires_at: pass.expires_at,
         active: pass.active,
-        servers: pass
-            .guilds
-            .into_iter()
-            .map(|id| GuildBody {
-                name: state
-                    .resolve_guild_name
-                    .as_ref()
-                    .and_then(|resolve| resolve(&id)),
-                id,
-            })
-            .collect(),
+        servers: pass.guilds.into_iter().map(resolve).collect(),
+        inactive_servers: pass.inactive_guilds.into_iter().map(resolve).collect(),
     }
 }
 
