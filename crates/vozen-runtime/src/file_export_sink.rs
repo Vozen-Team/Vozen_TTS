@@ -6,6 +6,7 @@
 
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -24,6 +25,53 @@ use crate::{
     TtsFileRuntimeOptions, engine_router::PerUserCommandSynthesizer,
     piper_adapter::PiperCommandSynthesizer, system_now_ms,
 };
+
+async fn take_export_attachment(path: &std::path::Path) -> serenity::Result<CreateAttachment> {
+    let attachment = CreateAttachment::path(path).await;
+    let removed = tokio::fs::remove_file(path).await;
+    let attachment = attachment?;
+    match removed {
+        Ok(()) => Ok(attachment),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(attachment),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// A request owns this directory until its audio has been read into the upload buffer.
+/// Drop also removes partial output when synthesis, attachment reads or the request fail.
+struct PrivateExportWorkspace {
+    path: PathBuf,
+}
+
+impl PrivateExportWorkspace {
+    fn new() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("vozen-tts-file-{}", uuid::Uuid::new_v4()));
+        let builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        let mut builder = builder;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path)?;
+        Ok(Self { path })
+    }
+
+    fn close(self) -> std::io::Result<()> {
+        std::fs::remove_dir_all(&self.path)
+    }
+}
+
+impl Drop for PrivateExportWorkspace {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("[tts-file] temporary audio cleanup failed: {error}");
+        }
+    }
+}
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +100,9 @@ fn export_response_kind(
 pub struct TtsFileGatewaySink {
     service: TtsFileExportService<PerUserCommandSynthesizer>,
     localizer: VoiceResponseLocalizer,
+    piper_path: PathBuf,
+    models_dir: PathBuf,
+    export_slots: tokio::sync::Semaphore,
 }
 
 impl TtsFileGatewaySink {
@@ -61,8 +112,8 @@ impl TtsFileGatewaySink {
     ) -> Result<Self, GatewayEventDispatchError> {
         let synthesizer =
             PerUserCommandSynthesizer::piper_only(PiperCommandSynthesizer::production(
-                options.piper_path,
-                options.models_dir,
+                options.piper_path.clone(),
+                options.models_dir.clone(),
                 options.cache_dir,
                 options.piper_concurrency,
             ));
@@ -76,6 +127,9 @@ impl TtsFileGatewaySink {
                 Arc::new(system_now_ms),
             ),
             localizer,
+            piper_path: options.piper_path,
+            models_dir: options.models_dir,
+            export_slots: tokio::sync::Semaphore::new(options.piper_concurrency),
         })
     }
 
@@ -124,14 +178,32 @@ impl GatewayEventSink for TtsFileGatewaySink {
         let guild_id = command.guild_id.map(|id| id.get().to_string());
         let preference_scope = guild_id.as_deref().unwrap_or("@user-app");
         let user_id = command.user.id.get().to_string();
+        let permit = self
+            .export_slots
+            .acquire()
+            .await
+            .map_err(|_| GatewayEventDispatchError)?;
+        let workspace = PrivateExportWorkspace::new().map_err(|_| GatewayEventDispatchError)?;
+        // Each request gets a separate cache namespace, so identical concurrent exports
+        // cannot delete or reuse another request's audio. The shared semaphore bounds Piper.
+        let synthesizer =
+            PerUserCommandSynthesizer::piper_only(PiperCommandSynthesizer::production(
+                self.piper_path.clone(),
+                self.models_dir.clone(),
+                workspace.path.clone(),
+                1,
+            ));
         let outcome = self
             .service
-            .execute(TtsFileExportInvocation {
-                guild_id: guild_id.as_deref(),
-                preference_scope,
-                user_id: &user_id,
-                raw: &parsed.text,
-            })
+            .execute_with_synthesizer(
+                TtsFileExportInvocation {
+                    guild_id: guild_id.as_deref(),
+                    preference_scope,
+                    user_id: &user_id,
+                    raw: &parsed.text,
+                },
+                &synthesizer,
+            )
             .await;
         let parameters = BTreeMap::new();
         let guild_locale = command.guild_locale.as_deref();
@@ -173,9 +245,8 @@ impl GatewayEventSink for TtsFileGatewaySink {
         };
         let response = match outcome {
             TtsFileExportOutcome::Ready(path) => {
-                // Piper returns an internal cache path. Serenity reads it into the HTTP upload;
-                // do not delete that cache entry, and do not create a second temporary copy.
-                let attachment = match CreateAttachment::path(path).await {
+                // Read the private temporary audio into memory and remove it before delivery.
+                let attachment = match take_export_attachment(&path).await {
                     Ok(mut attachment) => {
                         // Keep Node's stable download name instead of exposing the cache key.
                         attachment.filename = "vozen-audio.wav".to_owned();
@@ -188,6 +259,8 @@ impl GatewayEventSink for TtsFileGatewaySink {
                             guild_locale,
                             &BTreeMap::new(),
                         )?;
+                        workspace.close().map_err(|_| GatewayEventDispatchError)?;
+                        drop(permit);
                         command
                             .edit_response(&context, EditInteractionResponse::new().content(failed))
                             .await
@@ -201,6 +274,19 @@ impl GatewayEventSink for TtsFileGatewaySink {
             }
             _ => EditInteractionResponse::new().content(content),
         };
+        // Remove partial synthesis output as well as completed files. Do not announce a
+        // successful export if local cleanup failed. No workspace is held during upload.
+        let response = if workspace.close().is_ok() {
+            response
+        } else {
+            EditInteractionResponse::new().content(self.message(
+                "ttsFile.failed",
+                &command.locale,
+                guild_locale,
+                &BTreeMap::new(),
+            )?)
+        };
+        drop(permit);
         command
             .edit_response(&context, response)
             .await
@@ -218,6 +304,102 @@ impl GatewayEventSink for TtsFileGatewaySink {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn private_export_attachment_keeps_upload_bytes_but_removes_disk_audio() {
+        let path =
+            std::env::temp_dir().join(format!("vozen-private-export-{}.wav", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"synthetic private audio").expect("write fixture");
+        let attachment = take_export_attachment(&path)
+            .await
+            .expect("read attachment");
+        let retained = path.exists();
+        if retained {
+            std::fs::remove_file(&path).expect("clean failed regression fixture");
+        }
+        assert_eq!(attachment.data.as_slice(), b"synthetic private audio");
+        assert!(
+            !retained,
+            "private export must remove audio before an upload can begin"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_export_read_failure_cleans_all_request_output() {
+        let workspace = PrivateExportWorkspace::new().expect("workspace");
+        let root = workspace.path.clone();
+        std::fs::write(root.join("partial.wav"), b"partial private audio").expect("partial output");
+        assert!(
+            take_export_attachment(&root.join("missing.wav"))
+                .await
+                .is_err()
+        );
+        drop(workspace);
+        assert!(
+            !root.exists(),
+            "failed reads must leave no request workspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_export_identical_names_are_isolated_during_concurrent_reads() {
+        let first = PrivateExportWorkspace::new().expect("first workspace");
+        let second = PrivateExportWorkspace::new().expect("second workspace");
+        let first_path = first.path.join("same-content-key.wav");
+        let second_path = second.path.join("same-content-key.wav");
+        std::fs::write(&first_path, b"private export one").expect("first audio");
+        std::fs::write(&second_path, b"private export two").expect("second audio");
+        let (one, two) = tokio::join!(
+            take_export_attachment(&first_path),
+            take_export_attachment(&second_path),
+        );
+        assert_eq!(one.expect("first upload").data, b"private export one");
+        assert_eq!(two.expect("second upload").data, b"private export two");
+        assert!(!first_path.exists());
+        assert!(!second_path.exists());
+        first.close().expect("first cleanup");
+        second.close().expect("second cleanup");
+    }
+
+    #[tokio::test]
+    async fn private_export_cancelled_request_removes_partial_workspace() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let workspace = PrivateExportWorkspace::new().expect("workspace");
+            std::fs::write(
+                workspace.path.join("partial.wav"),
+                b"cancelled private audio",
+            )
+            .expect("partial audio");
+            sender
+                .send(workspace.path.clone())
+                .expect("send workspace path");
+            std::future::pending::<()>().await;
+            drop(workspace);
+        });
+        let root = receiver.await.expect("workspace ready");
+        task.abort();
+        assert!(task.await.expect_err("cancelled task").is_cancelled());
+        assert!(
+            !root.exists(),
+            "cancellation must drop the request-owned workspace"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_export_workspace_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let workspace = PrivateExportWorkspace::new().expect("workspace");
+        assert_eq!(
+            std::fs::metadata(&workspace.path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
 
     fn command(payload: &str) -> serenity::model::application::CommandData {
         serde_json::from_str(payload).expect("valid Discord command payload")

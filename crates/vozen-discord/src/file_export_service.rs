@@ -72,6 +72,17 @@ where
     S: CommandSpeechSynthesizer,
 {
     pub async fn execute(&self, invocation: TtsFileExportInvocation<'_>) -> TtsFileExportOutcome {
+        self.execute_with_synthesizer(invocation, &self.synthesizer)
+            .await
+    }
+
+    /// Reuses the same preparation policy and rate limit while the caller owns an isolated
+    /// synthesis workspace. Private exports must not share a persistent voice cache.
+    pub async fn execute_with_synthesizer(
+        &self,
+        invocation: TtsFileExportInvocation<'_>,
+        synthesizer: &impl CommandSpeechSynthesizer,
+    ) -> TtsFileExportOutcome {
         let raw = invocation.raw.trim();
         // Mirror the command handler: reject non-readable input before spending a token.
         if !has_readable_text(raw) {
@@ -143,7 +154,7 @@ where
         if !request_models_available(&request, &self.settings.available_models) {
             return TtsFileExportOutcome::VoiceUnavailable;
         }
-        self.synthesizer
+        synthesizer
             .synthesize(&request)
             .await
             .map(TtsFileExportOutcome::Ready)
@@ -204,6 +215,49 @@ mod tests {
             default_speed: 1.0,
             default_engine: vozen_core::SynthesisEngine::Piper,
         }
+    }
+
+    #[tokio::test]
+    async fn private_export_request_synthesizers_share_rate_limit_and_never_use_default_cache() {
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
+        store
+            .lock()
+            .expect("store")
+            .update_guild_config(
+                "guild",
+                GuildConfigPatch {
+                    rate_per_min: Some(1),
+                    ..GuildConfigPatch::default()
+                },
+            )
+            .expect("config");
+        let service = TtsFileExportService::new(
+            store,
+            FakeSynthesizer::default(),
+            settings(),
+            Arc::new(|| 0),
+        );
+        let first = FakeSynthesizer::default();
+        let second = FakeSynthesizer::default();
+        let invocation = || TtsFileExportInvocation {
+            guild_id: Some("guild"),
+            preference_scope: "guild",
+            user_id: "user",
+            raw: "private text",
+        };
+        assert!(matches!(
+            service.execute_with_synthesizer(invocation(), &first).await,
+            TtsFileExportOutcome::Ready(_)
+        ));
+        assert_eq!(
+            service
+                .execute_with_synthesizer(invocation(), &second)
+                .await,
+            TtsFileExportOutcome::RateLimited
+        );
+        assert_eq!(service.synthesizer.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(first.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(second.calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
