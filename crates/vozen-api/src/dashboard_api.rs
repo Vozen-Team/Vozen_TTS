@@ -46,6 +46,7 @@ pub enum DashboardAccess<T> {
     Allowed(T),
     Unauthenticated,
     Forbidden,
+    Unavailable,
 }
 
 #[async_trait]
@@ -160,6 +161,11 @@ async fn list_guilds(State(state): State<DashboardState>, headers: HeaderMap) ->
             error(StatusCode::UNAUTHORIZED, "invalid_token", &state)
         }
         DashboardAccess::Forbidden => error(StatusCode::FORBIDDEN, "forbidden", &state),
+        DashboardAccess::Unavailable => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authorization_unavailable",
+            &state,
+        ),
     }
 }
 
@@ -362,6 +368,11 @@ async fn authorize(state: &DashboardState, bearer: &str, guild_id: &str) -> Resu
             Err(error(StatusCode::UNAUTHORIZED, "invalid_token", state))
         }
         DashboardAccess::Forbidden => Err(error(StatusCode::FORBIDDEN, "forbidden", state)),
+        DashboardAccess::Unavailable => Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authorization_unavailable",
+            state,
+        )),
     }
 }
 
