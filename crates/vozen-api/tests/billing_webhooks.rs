@@ -1,5 +1,8 @@
 //! Isolated QA fixtures: no Stripe calls, real credentials, or production database.
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -15,7 +18,10 @@ use vozen_api::{
     premium_api::{
         ActivationIdentity, ActivationIdentityError, DiscordIdentity, DiscordIdentityVerifier,
     },
-    stripe_api::{StripeApiConfig, StripePriceIds, stripe_router},
+    stripe_api::{
+        StripeApiConfig, StripePriceIds, StripeSubscriptionLookup,
+        stripe_router_with_subscription_lookup,
+    },
 };
 use vozen_store::SqliteStore;
 
@@ -37,28 +43,62 @@ impl DiscordIdentityVerifier for NoIdentity {
     }
 }
 
+struct Lookup {
+    value: Option<Value>,
+    calls: Arc<AtomicUsize>,
+}
+#[async_trait]
+impl StripeSubscriptionLookup for Lookup {
+    async fn retrieve(&self, _: &str) -> Result<Value, ()> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        self.value.clone().ok_or(())
+    }
+}
+
+fn provider_subscription() -> Value {
+    json!({"id":"sub_qa","customer":"cus_qa","livemode":false,"status":"active",
+        "metadata":{"discord_user_id":"user_qa","plan":"plus","seats":"1"},
+        "items":{"data":[{"quantity":1,"current_period_end":(NOW+30*DAY)/1000,
+            "price":{"id":"price_isolated_fixture","recurring":{"interval":"month"}}}]}})
+}
+
 fn fixture() -> (Router, Arc<Mutex<SqliteStore>>) {
+    let (app, store, _) = fixture_with_lookup(Some(provider_subscription()));
+    (app, store)
+}
+
+fn fixture_with_lookup(
+    value: Option<Value>,
+) -> (Router, Arc<Mutex<SqliteStore>>, Arc<AtomicUsize>) {
     let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
     let price = "price_isolated_fixture".to_string();
-    let app = stripe_router(StripeApiConfig {
-        origin: "https://vozen.org".into(),
-        secret_key: "sk_test_fake_not_a_credential".into(),
-        publishable_key: "pk_test_fake_not_a_credential".into(),
-        webhook_secret: SECRET.into(),
-        prices: StripePriceIds {
-            plus_monthly: price.clone(),
-            plus_yearly: price.clone(),
-            premium_monthly: price.clone(),
-            premium_yearly: price.clone(),
-            max_monthly: price.clone(),
-            max_yearly: price,
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = stripe_router_with_subscription_lookup(
+        StripeApiConfig {
+            origin: "https://vozen.org".into(),
+            secret_key: "sk_test_fake_not_a_credential".into(),
+            publishable_key: "pk_test_fake_not_a_credential".into(),
+            webhook_secret: SECRET.into(),
+            prices: StripePriceIds {
+                plus_monthly: price.clone(),
+                plus_yearly: price.clone(),
+                premium_monthly: price.clone(),
+                premium_yearly: price.clone(),
+                max_monthly: price.clone(),
+                max_yearly: price,
+            },
+            store: store.clone(),
+            identity_verifier: Arc::new(NoIdentity),
+            now: Arc::new(|| NOW),
         },
-        store: store.clone(),
-        identity_verifier: Arc::new(NoIdentity),
-        now: Arc::new(|| NOW),
-    })
+        Arc::new(Lookup {
+            value,
+            calls: calls.clone(),
+        }),
+    )
     .unwrap();
-    (app, store)
+    (app, store, calls)
 }
 
 fn event(id: &str, kind: &str, object: Value) -> Value {
@@ -78,7 +118,7 @@ fn invoice(id: &str, end: i64) -> Value {
     event(
         id,
         "invoice.paid",
-        json!({"id":"in_qa_same_invoice", "subscription":"sub_qa",
+        json!({"id":"in_qa_same_invoice", "subscription":"sub_qa", "customer":"cus_qa",
         "lines":{"data":[{"period":{"end":end / 1000}}]}}),
     )
 }
@@ -156,28 +196,156 @@ async fn altered_signed_body_is_rejected_without_subscription_or_event_write() {
 }
 
 #[tokio::test]
-async fn invoice_before_checkout_can_be_retried_after_identity_arrives() {
+async fn invoice_before_checkout_recovers_without_event_redelivery() {
     let (app, store) = fixture();
     let paid = invoice("evt_invoice_early_qa", NOW + 30 * DAY);
-    assert_eq!(
-        send(&app, paid.clone()).await,
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
+    assert_eq!(send(&app, paid.clone()).await, StatusCode::OK);
     assert!(
-        !store
+        store
             .lock()
             .unwrap()
             .stripe_event_processed("evt_invoice_early_qa")
             .unwrap()
     );
-    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
-    assert_eq!(send(&app, paid).await, StatusCode::OK);
     assert!(
         store
             .lock()
             .unwrap()
             .is_user_premium("user_qa", NOW)
             .unwrap()
+    );
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    assert_eq!(send(&app, paid).await, StatusCode::OK);
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .user_premium_expiry("user_qa")
+            .unwrap(),
+        Some(NOW + 30 * DAY)
+    );
+}
+
+#[tokio::test]
+async fn early_invoice_provider_failure_is_retryable_without_partial_writes() {
+    let (app, store, calls) = fixture_with_lookup(None);
+    assert_eq!(
+        send(&app, invoice("evt_unavailable", NOW + DAY)).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let db = store.lock().unwrap();
+    assert!(!db.stripe_event_processed("evt_unavailable").unwrap());
+    assert!(db.stripe_subscription("sub_qa").unwrap().is_none());
+    assert!(db.user_premium_expiry("user_qa").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn early_invoice_rejects_untrusted_provider_context_without_writes() {
+    for (path, value) in [
+        ("/id", json!("sub_other")),
+        ("/customer", json!("cus_other")),
+        ("/livemode", json!(true)),
+        ("/metadata/discord_user_id", json!("")),
+        ("/metadata/plan", json!("unknown")),
+        ("/metadata/seats", json!("5")),
+        ("/items/data/0/quantity", json!(2)),
+        ("/items/data/0/price/id", json!("price_other")),
+        ("/items/data/0/price/recurring/interval", json!("week")),
+        ("/items/data/0/current_period_end", json!(i64::MAX)),
+    ] {
+        let mut subscription = provider_subscription();
+        *subscription.pointer_mut(path).unwrap() = value;
+        let (app, store, _) = fixture_with_lookup(Some(subscription));
+        assert_eq!(
+            send(&app, invoice("evt_bad_context", NOW + DAY)).await,
+            StatusCode::BAD_REQUEST,
+            "{path}"
+        );
+        let db = store.lock().unwrap();
+        assert!(!db.stripe_event_processed("evt_bad_context").unwrap());
+        assert!(db.stripe_subscription("sub_qa").unwrap().is_none());
+        assert!(db.user_premium_expiry("user_qa").unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn invalid_signature_does_not_trigger_provider_lookup() {
+    let (app, _, calls) = fixture_with_lookup(Some(provider_subscription()));
+    let body = serde_json::to_vec(&invoice("evt_bad_sig", NOW + DAY)).unwrap();
+    let response = app
+        .oneshot(
+            Request::post("/webhook/stripe")
+                .header("stripe-signature", "t=1,v1=bad")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn processed_invoice_does_not_lookup_or_recreate_deleted_identity() {
+    let (app, store, calls) = fixture_with_lookup(None);
+    store
+        .lock()
+        .unwrap()
+        .record_stripe_event_once("evt_already_processed", NOW)
+        .unwrap();
+    assert_eq!(
+        send(&app, invoice("evt_already_processed", NOW + DAY)).await,
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(
+        store
+            .lock()
+            .unwrap()
+            .stripe_subscription("sub_qa")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn simultaneous_early_invoices_converge_on_paid_time() {
+    let (app, store, calls) = fixture_with_lookup(Some(provider_subscription()));
+    let (first, second) = tokio::join!(
+        send(&app, invoice("evt_early_a", NOW + DAY)),
+        send(&app, invoice("evt_early_b", NOW + 2 * DAY))
+    );
+    assert_eq!(first, StatusCode::OK);
+    assert_eq!(second, StatusCode::OK);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let db = store.lock().unwrap();
+    assert_eq!(
+        db.user_premium_expiry("user_qa").unwrap(),
+        Some(NOW + 2 * DAY)
+    );
+    assert!(!db.is_user_premium("other_user", NOW).unwrap());
+}
+
+#[tokio::test]
+async fn recovered_cancellation_survives_late_checkout() {
+    let mut subscription = provider_subscription();
+    subscription["status"] = json!("canceled");
+    let (app, store, _) = fixture_with_lookup(Some(subscription));
+    assert_eq!(
+        send(&app, invoice("evt_early_paid", NOW + DAY)).await,
+        StatusCode::OK
+    );
+    assert_eq!(send(&app, checkout()).await, StatusCode::OK);
+    assert_eq!(
+        store
+            .lock()
+            .unwrap()
+            .stripe_subscription("sub_qa")
+            .unwrap()
+            .unwrap()
+            .status,
+        "canceled"
     );
 }
 

@@ -183,6 +183,18 @@ impl SqliteStore {
         input: &StripeEventInput,
         now: i64,
     ) -> Result<StripeEventApplyOutcome, StoreError> {
+        self.apply_stripe_event_once_with_subscription(event_id, input, None, now)
+    }
+
+    /// Recover an unknown paid subscription and apply its invoice atomically. The caller must
+    /// obtain this context from the authenticated Stripe API, not from client-supplied metadata.
+    pub fn apply_stripe_event_once_with_subscription(
+        &self,
+        event_id: &str,
+        input: &StripeEventInput,
+        recovered: Option<&StripeSubscriptionInput>,
+        now: i64,
+    ) -> Result<StripeEventApplyOutcome, StoreError> {
         let transaction = self.connection().unchecked_transaction()?;
         let inserted = transaction.execute(
             "INSERT OR IGNORE INTO stripe_event (event_id, processed_at) VALUES (?1, ?2)",
@@ -190,6 +202,31 @@ impl SqliteStore {
         )?;
         if inserted == 0 {
             return Ok(StripeEventApplyOutcome::AlreadyApplied);
+        }
+        if let Some(subscription) = recovered {
+            if !matches!(input, StripeEventInput::InvoicePaid { subscription_id, .. }
+                if subscription_id == &subscription.subscription_id)
+                || subscription.customer_id.is_empty()
+                || subscription.user_id.is_empty()
+            {
+                return Err(StoreError::IntegrityCheck(
+                    "invalid Stripe recovery context".into(),
+                ));
+            }
+            transaction.execute(
+                "INSERT INTO stripe_subscription
+                 (subscription_id, customer_id, user_id, plan, seats, current_period_end, status, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(subscription_id) DO NOTHING",
+                params![subscription.subscription_id, subscription.customer_id, subscription.user_id,
+                    subscription.plan, subscription.seats, subscription.current_period_end, subscription.status, now],
+            )?;
+            verify_subscription_identity(
+                &transaction,
+                &subscription.subscription_id,
+                &subscription.customer_id,
+                &subscription.user_id,
+            )?;
         }
 
         match input {
@@ -204,12 +241,10 @@ impl SqliteStore {
                     "INSERT INTO stripe_subscription
                      (subscription_id, customer_id, user_id, plan, seats, current_period_end, status, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, 0, 'active', ?6)
-                     ON CONFLICT(subscription_id) DO UPDATE SET
-                       customer_id=excluded.customer_id, user_id=excluded.user_id,
-                       plan=excluded.plan, seats=excluded.seats,
-                       status=excluded.status, updated_at=excluded.updated_at",
+                     ON CONFLICT(subscription_id) DO NOTHING",
                     params![subscription_id, customer_id, user_id, plan, seats, now],
                 )?;
+                verify_subscription_identity(&transaction, subscription_id, customer_id, user_id)?;
             }
             StripeEventInput::InvoicePaid {
                 subscription_id,
@@ -345,6 +380,24 @@ impl SqliteStore {
     }
 }
 
+fn verify_subscription_identity(
+    transaction: &rusqlite::Transaction<'_>,
+    subscription_id: &str,
+    customer_id: &str,
+    user_id: &str,
+) -> Result<(), StoreError> {
+    let matches = transaction.query_row(
+        "SELECT customer_id = ?2 AND user_id = ?3 FROM stripe_subscription WHERE subscription_id = ?1",
+        params![subscription_id, customer_id, user_id], |row| row.get::<_, bool>(0),
+    )?;
+    if !matches {
+        return Err(StoreError::IntegrityCheck(
+            "Stripe subscription identity conflict".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +434,65 @@ mod tests {
                 .stripe_subscription("sub_test")
                 .expect("subscription")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn late_checkout_does_not_reactivate_canceled_subscription() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .apply_stripe_event_once("checkout", &checkout(), NOW)
+            .unwrap();
+        store
+            .apply_stripe_event_once(
+                "canceled",
+                &StripeEventInput::SubscriptionUpdated {
+                    subscription_id: "sub_test".into(),
+                    period_end: Some(NOW + 60_000),
+                    status: "canceled".into(),
+                },
+                NOW + 1,
+            )
+            .unwrap();
+        store
+            .apply_stripe_event_once("late_checkout", &checkout(), NOW + 2)
+            .unwrap();
+        assert_eq!(
+            store
+                .stripe_subscription("sub_test")
+                .unwrap()
+                .unwrap()
+                .status,
+            "canceled"
+        );
+    }
+
+    #[test]
+    fn checkout_cannot_rebind_existing_subscription_to_another_user() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .apply_stripe_event_once("checkout", &checkout(), NOW)
+            .unwrap();
+        let conflicting = StripeEventInput::Checkout {
+            subscription_id: "sub_test".into(),
+            customer_id: "cus_other".into(),
+            user_id: "other_user".into(),
+            plan: "plus".into(),
+            seats: 1,
+        };
+        assert!(
+            store
+                .apply_stripe_event_once("conflict", &conflicting, NOW + 1)
+                .is_err()
+        );
+        assert!(!store.stripe_event_processed("conflict").unwrap());
+        assert_eq!(
+            store
+                .stripe_subscription("sub_test")
+                .unwrap()
+                .unwrap()
+                .user_id,
+            "user_test"
         );
     }
 
@@ -470,6 +582,44 @@ mod tests {
         assert_eq!(
             store.user_premium_expiry("user_test").unwrap(),
             Some(NOW + 3_600_000)
+        );
+    }
+
+    #[test]
+    fn failed_recovery_grant_rolls_back_identity_and_event_together() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let context = StripeSubscriptionInput {
+            subscription_id: "sub_test".into(),
+            customer_id: "cus_test".into(),
+            user_id: "user_test".into(),
+            plan: "plus".into(),
+            seats: 1,
+            current_period_end: NOW + 60_000,
+            status: "active".into(),
+            updated_at: NOW,
+        };
+        let paid = StripeEventInput::InvoicePaid {
+            subscription_id: "sub_test".into(),
+            period_end: Some(NOW + 60_000),
+        };
+        store.connection().execute_batch("CREATE TEMP TRIGGER fail_recovered_grant BEFORE INSERT ON premium_user BEGIN SELECT RAISE(ABORT, 'isolated failure'); END;").unwrap();
+        assert!(
+            store
+                .apply_stripe_event_once_with_subscription("paid", &paid, Some(&context), NOW)
+                .is_err()
+        );
+        assert!(!store.stripe_event_processed("paid").unwrap());
+        assert!(store.stripe_subscription("sub_test").unwrap().is_none());
+        store
+            .connection()
+            .execute_batch("DROP TRIGGER fail_recovered_grant")
+            .unwrap();
+        store
+            .apply_stripe_event_once_with_subscription("paid", &paid, Some(&context), NOW)
+            .unwrap();
+        assert_eq!(
+            store.user_premium_expiry("user_test").unwrap(),
+            Some(NOW + 60_000)
         );
     }
 

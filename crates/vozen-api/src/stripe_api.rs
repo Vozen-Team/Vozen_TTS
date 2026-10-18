@@ -22,7 +22,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
-use vozen_store::{SqliteStore, StripeEventApplyOutcome, StripeEventInput};
+use vozen_store::{
+    SqliteStore, StripeEventApplyOutcome, StripeEventInput, StripeSubscriptionInput,
+};
 
 use crate::premium_api::DiscordIdentityVerifier;
 
@@ -107,9 +109,54 @@ struct StripeState {
     verifier: Arc<dyn DiscordIdentityVerifier>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
     client: reqwest::Client,
+    subscription_lookup: Arc<dyn StripeSubscriptionLookup>,
 }
 
 pub fn stripe_router(config: StripeApiConfig) -> Result<Router, StripeApiConfigError> {
+    build_stripe_router(config, None)
+}
+
+/// Provider boundary for deterministic offline billing tests. Production always uses Stripe's
+/// authenticated HTTPS API; this adapter does not change the provider URL or expose credentials.
+#[async_trait::async_trait]
+pub trait StripeSubscriptionLookup: Send + Sync {
+    async fn retrieve(&self, subscription_id: &str) -> Result<Value, ()>;
+}
+
+struct ProviderSubscriptionLookup {
+    client: reqwest::Client,
+    secret: String,
+}
+
+#[async_trait::async_trait]
+impl StripeSubscriptionLookup for ProviderSubscriptionLookup {
+    async fn retrieve(&self, subscription_id: &str) -> Result<Value, ()> {
+        self.client
+            .get(format!("{STRIPE_API}/subscriptions/{subscription_id}"))
+            .header("Stripe-Version", STRIPE_API_VERSION)
+            .basic_auth(&self.secret, Some(""))
+            .send()
+            .await
+            .map_err(|_| ())?
+            .error_for_status()
+            .map_err(|_| ())?
+            .json()
+            .await
+            .map_err(|_| ())
+    }
+}
+
+pub fn stripe_router_with_subscription_lookup(
+    config: StripeApiConfig,
+    lookup: Arc<dyn StripeSubscriptionLookup>,
+) -> Result<Router, StripeApiConfigError> {
+    build_stripe_router(config, Some(lookup))
+}
+
+fn build_stripe_router(
+    config: StripeApiConfig,
+    lookup: Option<Arc<dyn StripeSubscriptionLookup>>,
+) -> Result<Router, StripeApiConfigError> {
     if config.secret_key.trim().is_empty() {
         return Err(StripeApiConfigError::MissingSecret);
     }
@@ -138,6 +185,12 @@ pub fn stripe_router(config: StripeApiConfig) -> Result<Router, StripeApiConfigE
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
+    let subscription_lookup = lookup.unwrap_or_else(|| {
+        Arc::new(ProviderSubscriptionLookup {
+            client: client.clone(),
+            secret: config.secret_key.clone(),
+        })
+    });
     let router = Router::new()
         .route("/api/billing/checkout", any(checkout))
         .route("/api/billing/checkout/elements", any(checkout_elements))
@@ -154,6 +207,7 @@ pub fn stripe_router(config: StripeApiConfig) -> Result<Router, StripeApiConfigE
             verifier: config.identity_verifier,
             now: config.now,
             client,
+            subscription_lookup,
         })
         .layer(axum::extract::DefaultBodyLimit::max(256_000));
     Ok(router)
@@ -574,9 +628,75 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
         Ok(input) => input,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
+    match state
+        .store
+        .lock()
+        .map_err(|_| ())
+        .and_then(|db| db.stripe_event_processed(event_id).map_err(|_| ()))
+    {
+        Ok(true) => return StatusCode::OK.into_response(),
+        Ok(false) => {}
+        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+    let recovered = if let StripeEventInput::InvoicePaid {
+        subscription_id, ..
+    } = &input
+    {
+        let existing = match state
+            .store
+            .lock()
+            .map_err(|_| ())
+            .and_then(|db| db.stripe_subscription(subscription_id).map_err(|_| ()))
+        {
+            Ok(existing) => existing,
+            Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        if let Some(existing) = existing {
+            if object
+                .get("customer")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id != existing.customer_id)
+            {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            None
+        } else {
+            if !subscription_id.starts_with("sub_")
+                || subscription_id.len() > 200
+                || !subscription_id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            let Some(customer) = object
+                .get("customer")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            let value = match state.subscription_lookup.retrieve(subscription_id).await {
+                Ok(value) => value,
+                Err(()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            let Some(recovered) = recovered_subscription(&value, subscription_id, customer, &state)
+            else {
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            Some(recovered)
+        }
+    } else {
+        None
+    };
     let outcome = state.store.lock().map_err(|_| ()).and_then(|store| {
         store
-            .apply_stripe_event_once(event_id, &input, (state.now)())
+            .apply_stripe_event_once_with_subscription(
+                event_id,
+                &input,
+                recovered.as_ref(),
+                (state.now)(),
+            )
             .map_err(|_| ())
     });
     match outcome {
@@ -585,6 +705,71 @@ async fn webhook(State(state): State<StripeState>, headers: HeaderMap, body: Byt
         }
         Err(()) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+fn recovered_subscription(
+    value: &Value,
+    id: &str,
+    customer: &str,
+    state: &StripeState,
+) -> Option<StripeSubscriptionInput> {
+    let live = state.secret_key.starts_with("sk_live_") || state.secret_key.starts_with("rk_live_");
+    if value.get("id")?.as_str()? != id
+        || value.get("customer")?.as_str()? != customer
+        || value.get("livemode")?.as_bool()? != live
+    {
+        return None;
+    }
+    let metadata = value.get("metadata")?;
+    let user_id = metadata.get("discord_user_id")?.as_str()?.trim();
+    if user_id.is_empty() {
+        return None;
+    }
+    let plan = metadata.get("plan")?.as_str()?;
+    let items = value.pointer("/items/data")?.as_array()?;
+    if items.len() != 1 || items[0].get("quantity")?.as_i64()? != 1 {
+        return None;
+    }
+    let interval = match items[0].pointer("/price/recurring/interval")?.as_str()? {
+        "month" => "monthly",
+        "year" => "yearly",
+        _ => return None,
+    };
+    let (price, seats) = state.prices.get(plan, interval)?;
+    if items[0].pointer("/price/id")?.as_str()? != price
+        || metadata.get("seats")?.as_str()?.parse::<i64>().ok()? != seats
+    {
+        return None;
+    }
+    let seconds = value
+        .get("current_period_end")
+        .and_then(Value::as_i64)
+        .or_else(|| items[0].get("current_period_end").and_then(Value::as_i64))?;
+    let period_end = stripe_period_end_ms(seconds).filter(|v| *v > 0)?;
+    let status = value.get("status")?.as_str()?;
+    if !matches!(
+        status,
+        "active"
+            | "past_due"
+            | "canceled"
+            | "unpaid"
+            | "trialing"
+            | "incomplete"
+            | "incomplete_expired"
+            | "paused"
+    ) {
+        return None;
+    }
+    Some(StripeSubscriptionInput {
+        subscription_id: id.into(),
+        customer_id: customer.into(),
+        user_id: user_id.into(),
+        plan: plan.into(),
+        seats,
+        current_period_end: period_end,
+        status: status.into(),
+        updated_at: (state.now)(),
+    })
 }
 
 fn stripe_event_input(event_type: &str, object: &Value) -> Result<StripeEventInput, String> {
