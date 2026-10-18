@@ -14,12 +14,16 @@ a unified catalog. Public-site new-checkout availability is a separate policy.
   the oldest saved links up to its limit, ordered by activation time and guild ID.
   Excess links are saved but not authorized. Independent benefits keep their own
   expiry and legacy financial aggregates are not reassigned to another subscription.
-- Only a completed schedule created by this flow can be released when confirming
-  another change. Pending/foreign schedules, unpaid or complex subscriptions fail
-  closed. Canceling a pending change is not currently exposed by this flow.
+- A completed schedule created by this flow can be released when confirming another
+  change. An owned pending change can instead be removed explicitly with its own
+  short-lived signed token. That releases only the schedule, not the subscription,
+  and leaves paid rights and renewal settings unchanged. Foreign schedules, unpaid
+  or complex subscriptions fail closed. To cancel renewal after removing a pending
+  change, use billing management. This addresses the [Stripe portal limitation](https://docs.stripe.com/customer-management#limitations)
+  that scheduled updates block portal subscription cancellation.
 
 POST `/api/billing/plans`, `/api/billing/change/preview`, and
-`/api/billing/change/confirm` require the verified Discord account and matching
+`/api/billing/change/confirm`, and `/api/billing/change/cancel` require the verified Discord account and matching
 stored/provider ownership. Preview performs no subscription write. A five-minute
 signed token binds the current item, period, target Price, quote and identity;
 confirmation rechecks them. Stripe request idempotency is token-specific. On an
@@ -52,7 +56,8 @@ quotes equaled paid test invoices. Provider objects were replayed into the local
 signed endpoint with isolated credentials; this is not proof of live webhook
 delivery or settlement. No pre-existing customer subscription was changed.
 
-The new plan-change module measured 88.9% line coverage in the isolated Linux run.
+The final plan-change module, including pending-change removal, measured 92.4% line
+coverage in a fresh isolated Linux profile run.
 Branch instrumentation was not enabled. Production charges are deliberately not a
 QA gate. Record the final CI, deployed revision, health, unchanged live-subscription
 fingerprint and public asset verification in the operational release receipt.

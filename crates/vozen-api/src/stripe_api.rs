@@ -281,6 +281,10 @@ fn build_stripe_router(
         .route("/api/billing/plans", any(plan_changes::plans))
         .route("/api/billing/change/preview", any(plan_changes::preview))
         .route("/api/billing/change/confirm", any(plan_changes::confirm))
+        .route(
+            "/api/billing/change/cancel",
+            any(plan_changes::cancel_pending),
+        )
         .route("/api/billing/checkout", any(checkout))
         .route("/api/billing/checkout/elements", any(checkout_elements))
         .route("/api/billing/checkout/status", any(checkout_status))
