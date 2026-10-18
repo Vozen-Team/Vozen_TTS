@@ -41,6 +41,16 @@ identical verified retry checks health without recreating the container. A
 manual runtime change requires operator reconciliation of state. Broker errors
 do not disclose bearer tokens, configuration, user messages or Docker output.
 
+After a healthy cutover and atomic state write, old `vozen-rust` images are
+removed by exact digest, without force or global pruning. The verified current
+image, broker-pinned rollback and every image referenced by a running or stopped
+container are preserved. Images with another repository alias, no identifying
+revision label or ambiguous metadata are retained. Docker may refuse an image
+with multiple tags; such a refusal is reported as a cleanup warning, not a failed
+release or a reason to roll back a healthy runtime. Verified retries also attempt
+cleanup under the same deployment lock. No volume, data directory, database or
+backup is a cleanup target.
+
 The GitHub SSH key is dedicated to publication. Its authorized-keys entry uses
 `restrict` and the root-owned forced command `vozen-publish-ssh`, which accepts
 only `put SHA`, `deploy` and `cleanup SHA`. It cannot run a shell, SFTP/SCP,
@@ -50,7 +60,7 @@ operator SSH keys are preserved; their permissions are not changed by this setup
 Checks:
 
 ```sh
-python3 -m unittest discover -s deploy/broker -p test_broker.py -v
+python3 -m unittest discover -s deploy/broker -p 'test_*.py' -v
 node deploy/broker/check_workflow.mjs
 ```
 

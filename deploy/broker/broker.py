@@ -197,6 +197,95 @@ def live():
     return strict_json(docker("container", "inspect", CONTAINER))[0]
 
 
+def retention_guard(current, rollback):
+    """Called under the deployment lock, only after a verified successful cutover."""
+    for image in (current, rollback):
+        require(isinstance(image, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image),
+                "invalid retained image")
+    state = strict_json((STATE / "state.json").read_bytes())
+    require(state.get("broker_verified") is True and state.get("image") == current
+            and state.get("rollback") == rollback, "image retention state mismatch")
+    container = live()
+    require(container["Image"] == current
+            and container["State"].get("Health", {}).get("Status") == "healthy",
+            "image retention requires healthy verified runtime")
+    require(inspect_image("vozen-rust:rollback")["Id"] == rollback,
+            "image retention rollback tag mismatch")
+    return container["Id"]
+
+
+def container_images():
+    """Protect running AND stopped containers, including unrelated Docker workloads."""
+    images = set()
+    for identifier in docker("container", "ls", "--all", "--quiet", "--no-trunc").split():
+        require(re.fullmatch(r"[0-9a-f]{64}", identifier), "invalid container identifier")
+        containers = strict_json(docker("container", "inspect", identifier))
+        require(isinstance(containers, list) and len(containers) == 1
+                and containers[0].get("Id") == identifier, "invalid container metadata")
+        image = containers[0].get("Image")
+        require(isinstance(image, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image),
+                "invalid container image")
+        images.add(image)
+    return images
+
+
+def old_vozen_image(metadata):
+    tags = metadata.get("RepoTags")
+    if not tags:
+        return False  # An untagged image has no reliable repository ownership here.
+    require(isinstance(tags, list) and all(isinstance(tag, str) for tag in tags),
+            "invalid image tags")
+    if not all(re.fullmatch(r"vozen-rust:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", tag)
+               for tag in tags):
+        return False  # Preserve images with aliases in another repository.
+    revision = metadata.get("Config", {}).get("Labels", {}).get("org.opencontainers.image.revision")
+    return isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+
+
+def cleanup_old_images(current, rollback):
+    """Remove exact unused Vozen image IDs; never prune or operate on volumes/files."""
+    container_id = retention_guard(current, rollback)
+    identifiers = set(docker("image", "ls", "--quiet", "--no-trunc", "vozen-rust").split())
+    require(all(re.fullmatch(r"sha256:[0-9a-f]{64}", image) for image in identifiers),
+            "invalid image listing")
+    require({current, rollback} <= identifiers, "retained Vozen image is missing")
+    protected = {current, rollback} | container_images()
+    candidates = []
+    for image in sorted(identifiers - protected):
+        metadata = inspect_image(image)
+        require(metadata["Id"] == image, "candidate image identity mismatch")
+        if old_vozen_image(metadata):
+            candidates.append(image)
+    removed = 0
+    for image in candidates:
+        require(retention_guard(current, rollback) == container_id,
+                "runtime changed during image retention")
+        if image in container_images():
+            continue
+        metadata = inspect_image(image)
+        require(metadata["Id"] == image, "candidate image identity changed")
+        if not old_vozen_image(metadata):
+            continue
+        # Removing an ID without --force lets Docker refuse newly referenced or multiply
+        # tagged images. Never untag by name: an operator could have moved that tag.
+        docker("image", "rm", image)
+        removed += 1
+    require(retention_guard(current, rollback) == container_id,
+            "runtime changed after image retention")
+    return removed
+
+
+def cleanup_after_verified_deploy(current, rollback):
+    # A capacity-maintenance failure must not turn an already healthy cutover into a
+    # failed deployment, trigger a rollback, or interfere with archive cleanup.
+    try:
+        removed = cleanup_old_images(current, rollback)
+        print("Old Vozen image cleanup completed: " + str(removed) + " image(s) removed.", flush=True)
+    except Exception:
+        print("Warning: old Vozen image cleanup skipped or incomplete; inspect disk capacity.",
+              flush=True)
+
+
 def database_check(connection):
     require(connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             and not connection.execute("PRAGMA foreign_key_check").fetchall(), "database verification failed")
@@ -324,6 +413,7 @@ def deploy(request):
                 and state.get("run_id") == request["run_id"]
                 and state.get("archive_sha256") == request["sha256"]):
             wait_healthy()
+            cleanup_after_verified_deploy(state["image"], state.get("rollback"))
             print("Vozen revision already deployed and verified; no replacement.", flush=True)
             return
         require(shutil.disk_usage(STATE).free > MAX_ARCHIVE + 8 * 1024**3 + 1024**3,
@@ -353,6 +443,7 @@ def deploy(request):
                 os.fsync(stream.fileno())
             os.replace(temporary, STATE / "state.json")
             print("Verified Vozen deployment: " + request["sha"] + " " + candidate, flush=True)
+            cleanup_after_verified_deploy(candidate, previous)
         finally:
             archive.unlink(missing_ok=True)
             staging.rmdir()
