@@ -4165,7 +4165,7 @@ body.page-account .ppanel__logoutaction:active {
 
 /* Native dialog supplies focus containment and Escape handling. */
 .plan-change {
-  position: fixed;
+  position: fixed !important; /* Override the site's body-child stacking rule. */
   inset: 0;
   margin: auto;
   width: min(32rem, calc(100vw - 2rem));
