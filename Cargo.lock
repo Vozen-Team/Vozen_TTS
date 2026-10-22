@@ -4953,6 +4953,7 @@ dependencies = [
  "base64",
  "hmac",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -5009,6 +5010,16 @@ dependencies = [
  "uuid",
  "vozen-contracts",
  "vozen-core",
+ "vozen-store",
+]
+
+[[package]]
+name = "vozen-entitlementd"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
+ "vozen-api",
  "vozen-store",
 ]
 
