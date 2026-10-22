@@ -84,6 +84,7 @@ fn fixture_with_clock(
     let app = stripe_router_with_subscription_lookup(
         StripeApiConfig {
             origin: "https://vozen.org".into(),
+            purchases_enabled: false,
             secret_key: "sk_test_fake_not_a_credential".into(),
             publishable_key: "pk_test_fake_not_a_credential".into(),
             webhook_secret: SECRET.into(),
@@ -734,7 +735,12 @@ async fn unauthenticated_checkout_paths_do_not_create_provider_sessions() {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let expected = if path == "/api/billing/plans" || path == "/api/billing/portal" {
+            StatusCode::UNAUTHORIZED
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        };
+        assert_eq!(response.status(), expected);
     }
 }
 

@@ -111,6 +111,17 @@ fn fixture() -> (
     Arc<Provider>,
     Arc<AtomicI64>,
 ) {
+    fixture_with_purchases(true)
+}
+
+fn fixture_with_purchases(
+    purchases_enabled: bool,
+) -> (
+    Router,
+    Arc<Mutex<SqliteStore>>,
+    Arc<Provider>,
+    Arc<AtomicI64>,
+) {
     let db = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
     db.lock()
         .unwrap()
@@ -138,6 +149,7 @@ fn fixture() -> (
     let app = stripe_router_with_subscription_lookup(
         StripeApiConfig {
             origin: "https://vozen.org".into(),
+            purchases_enabled,
             secret_key: "sk_test_fixture".into(),
             publishable_key: "pk_test_fixture".into(),
             webhook_secret: "whsec_fixture_not_real".into(),
@@ -187,6 +199,50 @@ async fn preview(app: &Router, plan: &str, interval: &str) -> Value {
 }
 fn has(form: &[(String, String)], key: &str, value: &str) -> bool {
     form.iter().any(|(k, v)| k == key && v == value)
+}
+
+#[tokio::test]
+async fn paused_purchases_block_before_identity_and_keep_read_only_billing() {
+    let (app, db, provider, _) = fixture_with_purchases(false);
+    for path in [
+        "/api/billing/checkout",
+        "/api/billing/checkout/elements",
+        "/api/billing/change/preview",
+        "/api/billing/change/confirm",
+    ] {
+        for user in ["owner", "other", "invalid"] {
+            let (status, value) = request(&app, path, user, json!({})).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(value["error"], "payments_disabled");
+        }
+        let response = app
+            .clone()
+            .oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "https://vozen.org"
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    assert!(provider.posts.lock().unwrap().is_empty());
+    assert!(!db.lock().unwrap().is_user_premium("owner", NOW).unwrap());
+    let (status, _) = request(&app, "/api/billing/plans", "owner", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

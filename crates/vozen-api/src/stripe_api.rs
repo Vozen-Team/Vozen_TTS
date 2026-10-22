@@ -85,6 +85,7 @@ impl StripePriceIds {
 
 pub struct StripeApiConfig {
     pub origin: String,
+    pub purchases_enabled: bool,
     pub secret_key: String,
     pub publishable_key: String,
     pub webhook_secret: String,
@@ -119,6 +120,7 @@ impl std::error::Error for StripeApiConfigError {}
 #[derive(Clone)]
 struct StripeState {
     origin: HeaderValue,
+    purchases_enabled: bool,
     secret_key: Arc<str>,
     publishable_key: Arc<str>,
     webhook_secret: Arc<str>,
@@ -292,6 +294,7 @@ fn build_stripe_router(
         .route("/webhook/stripe", any(webhook))
         .with_state(StripeState {
             origin,
+            purchases_enabled: config.purchases_enabled,
             secret_key: Arc::from(config.secret_key),
             publishable_key: Arc::from(config.publishable_key),
             webhook_secret: Arc::from(config.webhook_secret),
@@ -329,6 +332,9 @@ async fn checkout(
     }
     if method != Method::POST {
         return cors(StatusCode::METHOD_NOT_ALLOWED, "method not allowed", &state);
+    }
+    if let Some(response) = purchases_paused(&state) {
+        return response;
     }
     let Some(user) = identity(&state, &headers).await else {
         return cors(StatusCode::UNAUTHORIZED, "unauthorized", &state);
@@ -445,6 +451,9 @@ async fn checkout_elements(
     }
     if method != Method::POST {
         return cors(StatusCode::METHOD_NOT_ALLOWED, "method not allowed", &state);
+    }
+    if let Some(response) = purchases_paused(&state) {
+        return response;
     }
     let Some(user) = identity(&state, &headers).await else {
         return cors(StatusCode::UNAUTHORIZED, "unauthorized", &state);
@@ -1255,6 +1264,16 @@ fn json_response(status: StatusCode, value: Value, state: &StripeState) -> Respo
     let mut response = (status, axum::Json(value)).into_response();
     add_cors(response.headers_mut(), state);
     response
+}
+
+fn purchases_paused(state: &StripeState) -> Option<Response> {
+    (!state.purchases_enabled).then(|| {
+        json_no_store_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "payments_disabled"}),
+            state,
+        )
+    })
 }
 
 fn json_no_store_response(status: StatusCode, value: Value, state: &StripeState) -> Response {

@@ -3168,6 +3168,10 @@ fn build_http_router(
                 Some(identity_verifier),
             ) => Some(vozen_api::stripe_api::StripeApiConfig {
                 origin: config.origin.clone(),
+                // Pausing new charges must leave renewal webhooks and existing billing intact.
+                purchases_enabled: premium_http_enabled(
+                    env::var("RUST_NEW_PAYMENTS_ENABLED").ok().as_deref(),
+                ),
                 secret_key,
                 publishable_key,
                 webhook_secret,

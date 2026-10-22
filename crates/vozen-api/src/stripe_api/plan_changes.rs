@@ -484,6 +484,9 @@ pub(super) async fn preview(
     if let Some(response) = guard(&state, &method) {
         return response;
     }
+    if let Some(response) = purchases_paused(&state) {
+        return response;
+    }
     let Some(user) = identity(&state, &headers).await else {
         return failure(&state, StatusCode::UNAUTHORIZED, "unauthorized");
     };
@@ -616,6 +619,9 @@ pub(super) async fn confirm(
     body: Bytes,
 ) -> Response {
     if let Some(response) = guard(&state, &method) {
+        return response;
+    }
+    if let Some(response) = purchases_paused(&state) {
         return response;
     }
     let Some(user) = identity(&state, &headers).await else {
