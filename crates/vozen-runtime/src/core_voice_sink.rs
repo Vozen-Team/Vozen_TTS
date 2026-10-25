@@ -3842,6 +3842,7 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
         if self.options.setup_enabled
             && let Interaction::Command(command) = &interaction
             && command.data.name == "setup"
+            && !command.data.options.is_empty()
         {
             return match tokio::time::timeout(
                 SETUP_TIMEOUT,

@@ -62,6 +62,7 @@ mod pronunciation_sink;
 mod redeem_sink;
 mod runtime_mode;
 mod server_stats_sink;
+mod setup_wizard;
 mod stats_sink;
 #[cfg(feature = "voice-driver")]
 mod streak_card;
@@ -2358,8 +2359,6 @@ enum RuntimeError {
     InviteGateway,
     #[error("help gateway initialisation failed")]
     HelpGateway,
-    #[error("welcome gateway initialisation failed")]
-    WelcomeGateway,
     #[error("vote gateway initialisation failed")]
     VoteGateway,
     #[error("top-speakers gateway initialisation failed")]
@@ -2589,6 +2588,12 @@ async fn run() -> Result<(), RuntimeError> {
     // shadow process must never authorize the still-live Node process to reconnect calls.
     let write_rejoin_marker_on_shutdown = config.core_voice.is_some();
     let mut event_sinks: Vec<Arc<dyn GatewayEventSink>> = Vec::new();
+    if setup_enabled(env::var("RUST_SETUP_ENABLED").ok().as_deref()) {
+        event_sinks.push(Arc::new(setup_wizard::SetupGatewaySink::new(
+            store.clone(),
+            gateway_state.clone(),
+        )));
+    }
     let consent_registry = SttConsentRegistry::default();
     // This sink only records departure markers and clears them on guild_create; it does not
     // consume messages or interactions, so it is safe while Node remains authoritative.
@@ -2596,10 +2601,7 @@ async fn run() -> Result<(), RuntimeError> {
         guild_lifecycle_sink::GuildLifecycleGatewaySink::new(store.clone(), topgg_trigger),
     ));
     if config.welcome {
-        event_sinks.push(Arc::new(
-            guild_welcome_sink::GuildWelcomeGatewaySink::new()
-                .map_err(|_| RuntimeError::WelcomeGateway)?,
-        ));
+        event_sinks.push(Arc::new(guild_welcome_sink::GuildWelcomeGatewaySink));
     }
     if let Some(sink) = owner_command_event_sink(config.owner_commands, store.clone())? {
         event_sinks.push(sink);

@@ -1436,21 +1436,7 @@
       "type": 1
     },
     {
-      "options": [
-        {
-          "channel_types": [0],
-          "name": "channel",
-          "description": "Auto-read channel (omit = use the current channel)",
-          "required": false,
-          "type": 7
-        },
-        {
-          "name": "test-voice",
-          "description": "Play a short local voice check after setup",
-          "required": false,
-          "type": 5
-        }
-      ],
+      "options": [],
       "name": "setup",
       "description": "Guided one-step configuration (admin)",
       "contexts": [0],

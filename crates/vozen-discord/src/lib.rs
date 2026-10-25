@@ -803,20 +803,24 @@ impl GatewayState {
         self.update_voice_state(guild_id, &bot_user_id, channel_id);
     }
 
-    fn remember_guild(&self, guild_id: String, guild_name: String) {
-        if let Ok(mut current) = self.guild_ids.write() {
-            current.insert(guild_id.clone());
-        }
+    fn remember_guild(&self, guild_id: String, guild_name: String) -> bool {
+        let first_observation = self
+            .guild_ids
+            .write()
+            .map(|mut current| current.insert(guild_id.clone()))
+            .unwrap_or(false);
         if let Ok(mut guild_names) = self.guild_names.write() {
             guild_names.insert(guild_id, guild_name);
         }
+        first_observation
     }
 
-    fn remember_guild_snapshot(&self, snapshot: GatewayGuildSnapshot) {
-        self.remember_guild(snapshot.id.clone(), snapshot.name.clone());
+    fn remember_guild_snapshot(&self, snapshot: GatewayGuildSnapshot) -> bool {
+        let first_observation = self.remember_guild(snapshot.id.clone(), snapshot.name.clone());
         if let Ok(mut snapshots) = self.guild_snapshots.write() {
             snapshots.insert(snapshot.id.clone(), snapshot);
         }
+        first_observation
     }
 
     fn remember_http(&self, http: Arc<serenity::http::Http>) {
@@ -1157,19 +1161,24 @@ fn log_event_sink_failure(event: &str) {
     eprintln!("[gateway] promoted event sink failed during {event}; event ignored");
 }
 
-fn should_deliver_guild_create_details(is_new: Option<bool>) -> bool {
-    is_new == Some(true)
+fn should_deliver_guild_create_details(
+    is_new: Option<bool>,
+    first_observation: bool,
+    is_ready: bool,
+) -> bool {
+    // Serenity has no is_new hint without its cache; READY already seeds existing membership.
+    is_ready && first_observation && is_new != Some(false)
 }
 
 #[async_trait]
 impl EventHandler for VozenGatewayHandler {
     async fn ready(&self, context: Context, ready: Ready) {
         self.gateway_state.remember_http(context.http.clone());
-        self.gateway_state.mark_ready();
         self.gateway_state
             .remember_bot_user(ready.user.id.get().to_string());
         self.gateway_state
             .replace_guilds(ready.guilds.iter().map(|guild| guild.id.get().to_string()));
+        self.gateway_state.mark_ready();
         context.set_presence(
             Some(ActivityData::listening(self.presence_text.clone())),
             OnlineStatus::Online,
@@ -1229,7 +1238,9 @@ impl EventHandler for VozenGatewayHandler {
         is_new: Option<bool>,
     ) {
         let guild_id = guild.id.get().to_string();
-        self.gateway_state
+        let is_ready = self.gateway_state.is_ready();
+        let first_observation = self
+            .gateway_state
             .remember_guild_snapshot(GatewayGuildSnapshot {
                 id: guild_id.clone(),
                 name: guild.name.clone(),
@@ -1239,7 +1250,8 @@ impl EventHandler for VozenGatewayHandler {
             });
         self.gateway_state.replace_guild_voice_states(&guild);
         if let Some(event_sink) = &self.event_sink {
-            let result = if should_deliver_guild_create_details(is_new) {
+            let result = if should_deliver_guild_create_details(is_new, first_observation, is_ready)
+            {
                 event_sink.on_guild_create_details(context, guild).await
             } else {
                 event_sink.on_guild_create(&guild_id).await
@@ -1593,9 +1605,66 @@ mod tests {
 
     #[test]
     fn guild_welcome_runs_only_for_a_confirmed_new_guild() {
-        assert!(should_deliver_guild_create_details(Some(true)));
-        assert!(!should_deliver_guild_create_details(Some(false)));
-        assert!(!should_deliver_guild_create_details(None));
+        assert!(should_deliver_guild_create_details(Some(true), true, true));
+        assert!(should_deliver_guild_create_details(None, true, true));
+        assert!(!should_deliver_guild_create_details(
+            Some(false),
+            true,
+            true
+        ));
+        assert!(!should_deliver_guild_create_details(None, false, true));
+        assert!(!should_deliver_guild_create_details(
+            Some(true),
+            false,
+            true
+        ));
+        assert!(!should_deliver_guild_create_details(None, true, false));
+    }
+
+    #[test]
+    fn cache_free_welcome_skips_startup_repeated_events_and_reconnect_but_allows_rejoin() {
+        let state = GatewayState::default();
+        let snapshot = |id: &str| GatewayGuildSnapshot {
+            id: id.into(),
+            name: "QA".into(),
+            icon: None,
+            member_count: 2,
+            joined_timestamp: 1_700_000_000,
+        };
+        state.replace_guilds(["existing".into()]);
+        state.mark_ready();
+        let first = state.remember_guild_snapshot(snapshot("existing"));
+        assert!(!should_deliver_guild_create_details(
+            None,
+            first,
+            state.is_ready()
+        ));
+        let first = state.remember_guild_snapshot(snapshot("joined"));
+        assert!(should_deliver_guild_create_details(
+            None,
+            first,
+            state.is_ready()
+        ));
+        let repeated = state.remember_guild_snapshot(snapshot("joined"));
+        assert!(!should_deliver_guild_create_details(
+            None,
+            repeated,
+            state.is_ready()
+        ));
+        state.replace_guilds(["existing".into(), "joined".into()]);
+        let reconnect = state.remember_guild_snapshot(snapshot("joined"));
+        assert!(!should_deliver_guild_create_details(
+            None,
+            reconnect,
+            state.is_ready()
+        ));
+        state.forget_guild("joined");
+        let rejoin = state.remember_guild_snapshot(snapshot("joined"));
+        assert!(should_deliver_guild_create_details(
+            None,
+            rejoin,
+            state.is_ready()
+        ));
     }
 
     #[test]

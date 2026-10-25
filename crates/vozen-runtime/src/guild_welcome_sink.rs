@@ -4,8 +4,6 @@
 //! therefore observe guild lifecycle events without posting a duplicate message while Node is
 //! still authoritative.
 
-use std::collections::BTreeMap;
-
 use async_trait::async_trait;
 use serenity::{
     builder::{CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage},
@@ -17,57 +15,26 @@ use serenity::{
         guild::{Guild, Member},
     },
 };
-use vozen_discord::{GatewayEventDispatchError, GatewayEventSink, VoiceResponseLocalizer};
+use vozen_discord::{GatewayEventDispatchError, GatewayEventSink};
 
-pub struct GuildWelcomeGatewaySink {
-    localizer: VoiceResponseLocalizer,
-}
+pub struct GuildWelcomeGatewaySink;
 
 impl GuildWelcomeGatewaySink {
-    pub fn new() -> Result<Self, GatewayEventDispatchError> {
-        Ok(Self {
-            localizer: VoiceResponseLocalizer::from_generated_contract()
-                .map_err(|_| GatewayEventDispatchError)?,
-        })
-    }
-
-    fn render(
-        &self,
-        key: &str,
-        locale: &str,
-        parameters: &BTreeMap<&str, String>,
-    ) -> Result<String, GatewayEventDispatchError> {
-        self.localizer
-            .render_key(key, Some(locale), None, parameters)
-            .ok_or(GatewayEventDispatchError)
-    }
-
-    fn welcome_embed(&self, locale: &str) -> Result<CreateEmbed, GatewayEventDispatchError> {
-        let mut parameters = BTreeMap::new();
-        parameters.insert("setup", "`/setup`".to_owned());
-        parameters.insert("help", "`/help`".to_owned());
-        let description = format!(
-            "{}\n\n{}",
-            self.render("welcome.description", locale, &parameters)?,
-            self.render("welcome.enginePlans", locale, &BTreeMap::new())?
-        );
-        let footer = self.render("welcome.footer", locale, &BTreeMap::new())?;
-        Ok(CreateEmbed::new()
-            .title(self.render("welcome.title", locale, &BTreeMap::new())?)
-            .description(description)
-            .field(
-                self.render("welcome.stepsTitle", locale, &BTreeMap::new())?,
-                self.render("welcome.stepsBody", locale, &BTreeMap::new())?,
-                false,
+    fn welcome_embed() -> CreateEmbed {
+        CreateEmbed::new()
+            .color(0x5865F2)
+            .title("Welcome to Vozen")
+            .description(
+                "Text to speech, no mic needed.\n\n**1.** Choose a chat with `/setup`.\n**2.** Join a voice channel and use `/join`.\n**3.** Type in your TTS chat.",
             )
-            .footer(CreateEmbedFooter::new(footer)))
+            .footer(CreateEmbedFooter::new("Setup requires Manage Server."))
     }
 
     fn can_post(guild: &Guild, channel: &GuildChannel, member: &Member) -> bool {
         channel.kind == ChannelType::Text
-            && guild
-                .user_permissions_in(channel, member)
-                .contains(Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES)
+            && guild.user_permissions_in(channel, member).contains(
+                Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES | Permissions::EMBED_LINKS,
+            )
     }
 
     fn pick_channel<'a>(guild: &'a Guild, member: &Member) -> Option<&'a GuildChannel> {
@@ -124,11 +91,9 @@ impl GatewayEventSink for GuildWelcomeGatewaySink {
         let Some(channel) = Self::pick_channel(&guild, &member) else {
             return Ok(());
         };
-        let locale = self
-            .localizer
-            .default_for_discord_locale(Some(&guild.preferred_locale));
         let message = CreateMessage::new()
-            .embed(self.welcome_embed(&locale)?)
+            .embed(Self::welcome_embed())
+            .components(crate::setup_wizard::welcome_components())
             .allowed_mentions(no_mentions());
         channel
             .id
@@ -159,6 +124,27 @@ mod tests {
         guild::Member,
         id::{ChannelId, GuildId, UserId},
     };
+
+    #[test]
+    fn welcome_preview_payload_has_three_steps_and_shared_setup_button() {
+        let payload = serde_json::to_value(
+            CreateMessage::new()
+                .embed(GuildWelcomeGatewaySink::welcome_embed())
+                .components(crate::setup_wizard::welcome_components())
+                .allowed_mentions(no_mentions()),
+        )
+        .unwrap();
+        assert_eq!(payload["embeds"][0]["title"], "Welcome to Vozen");
+        assert!(payload["embeds"][0]["fields"].is_null());
+        let description = payload["embeds"][0]["description"].as_str().unwrap();
+        assert!(description.contains("`/setup`") && description.contains("`/join`"));
+        assert!(description.split_whitespace().count() <= 35);
+        assert_eq!(
+            payload["components"][1]["components"][0]["custom_id"],
+            crate::setup_wizard::OPEN_ID
+        );
+        println!("WELCOME_PREVIEW={payload}");
+    }
 
     #[test]
     fn welcome_channel_falls_back_to_lowest_visible_text_channel() {
