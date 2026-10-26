@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'parse5';
 import { describe, expect, it } from 'vitest';
 const source = (path) => readFileSync(resolve(process.cwd(), path), { encoding: 'utf8' });
 const CLIENT_ID = '1523826014935842997';
-const CANONICAL_PERMISSIONS = '326420745216';
+const CANONICAL_PERMISSIONS = '326420745232';
 const INVITE_PERMISSIONS = CANONICAL_PERMISSIONS;
 const USER_ERASE_TABLES = ['talk_usage'];
 const GUILD_PURGE_TABLES = ['talk_usage'];
@@ -31,7 +31,18 @@ const htmlNodes = (html, predicate) => {
 describe('site acquisition and trust contracts', () => {
   it('keeps the bot, runtime, HTML fallbacks, and README on one invite bitfield', () => {
     expect(INVITE_PERMISSIONS).toBe(CANONICAL_PERMISSIONS);
+    expect(BigInt(CANONICAL_PERMISSIONS)).toBe(326420745216n | 16n);
+    expect(BigInt(CANONICAL_PERMISSIONS) & 8n).toBe(0n);
+    expect(source('crates/vozen-api/src/install_api.rs')).toContain(
+      `const TTS_PERMISSIONS: &str = "${CANONICAL_PERMISSIONS}";`,
+    );
     const runtime = source('site/js/main-v51.js');
+    expect(runtime).toContain(`const INVITE_PERMISSIONS = "${CANONICAL_PERMISSIONS}";`);
+    for (const path of readdirSync(resolve(process.cwd(), 'site'), { recursive: true })) {
+      if (String(path).endsWith('.html')) {
+        expect(source(`site/${path}`), String(path)).not.toContain('permissions=326420745216');
+      }
+    }
     const rustInvite = source('crates/vozen-runtime/src/invite_sink.rs');
     expect(rustInvite).toContain(
       `pub const INVITE_PERMISSIONS: &str = "${CANONICAL_PERMISSIONS}";`,

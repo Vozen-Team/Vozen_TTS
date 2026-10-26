@@ -49,8 +49,8 @@ impl VoiceResponseCatalog {
         Ok(catalog)
     }
 
-    /// Mirrors Node's locale precedence: a supported Discord client locale wins, then the stored
-    /// guild locale, then canonical English. Discord variants such as `pt-BR` normalize to `pt`.
+    /// Private responses use the Discord client locale; public callers omit it and supply the
+    /// configured guild locale. Unsupported locales fall back to English in either audience.
     #[must_use]
     pub fn resolve_locale<'a>(
         &'a self,
@@ -58,8 +58,8 @@ impl VoiceResponseCatalog {
         guild_locale: Option<&str>,
     ) -> &'a str {
         interaction_locale
+            .or(guild_locale)
             .and_then(|locale| self.normalize_locale(locale))
-            .or_else(|| guild_locale.and_then(|locale| self.normalize_locale(locale)))
             .unwrap_or(&self.default_locale)
     }
 
@@ -335,7 +335,8 @@ mod tests {
         let catalog = VoiceResponseCatalog::from_json(VOICE_RESPONSE_I18N).expect("valid i18n");
         assert_eq!(catalog.supported_locales.len(), 35);
         assert_eq!(catalog.resolve_locale(Some("fr-CA"), Some("pt")), "fr");
-        assert_eq!(catalog.resolve_locale(Some("ko"), Some("pt-BR")), "pt");
+        assert_eq!(catalog.resolve_locale(Some("ko"), Some("pt-BR")), "en");
+        assert_eq!(catalog.resolve_locale(None, Some("pt-BR")), "pt");
         assert_eq!(catalog.resolve_locale(None, None), "en");
         assert!(
             catalog

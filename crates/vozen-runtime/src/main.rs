@@ -1734,12 +1734,14 @@ fn uptime_event_sink(enabled: bool) -> Result<Option<Arc<dyn GatewayEventSink>>,
 fn invite_event_sink(
     enabled: bool,
     client_id: Option<String>,
+    store: Arc<Mutex<SqliteStore>>,
 ) -> Result<Option<Arc<dyn GatewayEventSink>>, RuntimeError> {
     if !enabled {
         return Ok(None);
     }
     Ok(Some(Arc::new(
-        invite_sink::InviteGatewaySink::new(client_id).map_err(|_| RuntimeError::InviteGateway)?,
+        invite_sink::InviteGatewaySink::new(client_id, store)
+            .map_err(|_| RuntimeError::InviteGateway)?,
     )))
 }
 
@@ -1848,12 +1850,16 @@ fn server_stats_event_sink(
     )))
 }
 
-fn game_list_event_sink(enabled: bool) -> Result<Option<Arc<dyn GatewayEventSink>>, RuntimeError> {
+fn game_list_event_sink(
+    enabled: bool,
+    store: Arc<Mutex<SqliteStore>>,
+) -> Result<Option<Arc<dyn GatewayEventSink>>, RuntimeError> {
     if !enabled {
         return Ok(None);
     }
     Ok(Some(Arc::new(
-        game_list_sink::GameListGatewaySink::new().map_err(|_| RuntimeError::GameListGateway)?,
+        game_list_sink::GameListGatewaySink::new(store)
+            .map_err(|_| RuntimeError::GameListGateway)?,
     )))
 }
 
@@ -2301,6 +2307,10 @@ enum RuntimeError {
     CloudflareWebAnalytics(#[from] vozen_api::web_analytics::CloudflareWebAnalyticsConfigError),
     #[error("Rust Discord command registration failed")]
     CommandRegistration,
+    #[error("setup gateway initialisation failed")]
+    SetupGateway,
+    #[error("welcome gateway initialisation failed")]
+    WelcomeGateway,
     #[error("VOTE_REDEMPTION_SECRET is required when TOPGG_WEBHOOK_SECRET is configured")]
     MissingVoteRedemptionSecret,
     #[error("{0} must be a positive number (and an integer where required)")]
@@ -2589,10 +2599,10 @@ async fn run() -> Result<(), RuntimeError> {
     let write_rejoin_marker_on_shutdown = config.core_voice.is_some();
     let mut event_sinks: Vec<Arc<dyn GatewayEventSink>> = Vec::new();
     if setup_enabled(env::var("RUST_SETUP_ENABLED").ok().as_deref()) {
-        event_sinks.push(Arc::new(setup_wizard::SetupGatewaySink::new(
-            store.clone(),
-            gateway_state.clone(),
-        )));
+        event_sinks.push(Arc::new(
+            setup_wizard::SetupGatewaySink::new(store.clone(), gateway_state.clone())
+                .map_err(|_| RuntimeError::SetupGateway)?,
+        ));
     }
     let consent_registry = SttConsentRegistry::default();
     // This sink only records departure markers and clears them on guild_create; it does not
@@ -2601,7 +2611,10 @@ async fn run() -> Result<(), RuntimeError> {
         guild_lifecycle_sink::GuildLifecycleGatewaySink::new(store.clone(), topgg_trigger),
     ));
     if config.welcome {
-        event_sinks.push(Arc::new(guild_welcome_sink::GuildWelcomeGatewaySink));
+        event_sinks.push(Arc::new(
+            guild_welcome_sink::GuildWelcomeGatewaySink::new(store.clone())
+                .map_err(|_| RuntimeError::WelcomeGateway)?,
+        ));
     }
     if let Some(sink) = owner_command_event_sink(config.owner_commands, store.clone())? {
         event_sinks.push(sink);
@@ -2698,7 +2711,11 @@ async fn run() -> Result<(), RuntimeError> {
     if let Some(sink) = uptime_event_sink(config.uptime)? {
         event_sinks.push(sink);
     }
-    if let Some(sink) = invite_event_sink(config.invite, config.invite_client_id.clone())? {
+    if let Some(sink) = invite_event_sink(
+        config.invite,
+        config.invite_client_id.clone(),
+        store.clone(),
+    )? {
         event_sinks.push(sink);
     }
     if let Some(sink) = help_event_sink(config.help, config.help_support_url.clone())? {
@@ -2747,7 +2764,7 @@ async fn run() -> Result<(), RuntimeError> {
     if let Some(sink) = privacy_event_sink(config.privacy, store.clone())? {
         event_sinks.push(sink);
     }
-    if let Some(sink) = game_list_event_sink(config.game_list)? {
+    if let Some(sink) = game_list_event_sink(config.game_list, store.clone())? {
         event_sinks.push(sink);
     }
     if let Some(sink) = game_scores_event_sink(config.game_scores, store.clone())? {

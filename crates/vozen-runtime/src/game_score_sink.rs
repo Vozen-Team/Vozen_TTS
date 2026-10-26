@@ -34,16 +34,11 @@ impl GameScoreGatewaySink {
     fn render(
         &self,
         key: &str,
-        command: &serenity::model::application::CommandInteraction,
+        locale: &str,
         parameters: &BTreeMap<&str, String>,
     ) -> Result<String, GatewayEventDispatchError> {
         self.localizer
-            .render_key(
-                key,
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
-                parameters,
-            )
+            .render_key(key, Some(locale), None, parameters)
             .ok_or(GatewayEventDispatchError)
     }
 
@@ -52,9 +47,14 @@ impl GameScoreGatewaySink {
         command: &serenity::model::application::CommandInteraction,
         action: GameScoreCommand,
     ) -> Result<(String, bool), GatewayEventDispatchError> {
+        let locale = if matches!(action, GameScoreCommand::Stats) {
+            command.locale.clone()
+        } else {
+            crate::ui::guild_locale(&self.store, command.guild_id)?
+        };
         let Some(guild_id) = command.guild_id else {
             return Ok((
-                self.render("game.leaderboard.empty", command, &BTreeMap::new())?,
+                self.render("game.leaderboard.empty", &locale, &BTreeMap::new())?,
                 false,
             ));
         };
@@ -67,19 +67,19 @@ impl GameScoreGatewaySink {
                     .map_err(|_| GatewayEventDispatchError)?;
                 if rows.is_empty() {
                     return Ok((
-                        self.render("game.leaderboard.empty", command, &BTreeMap::new())?,
+                        self.render("game.leaderboard.empty", &locale, &BTreeMap::new())?,
                         false,
                     ));
                 }
                 let mut lines =
-                    vec![self.render("game.leaderboard.title", command, &BTreeMap::new())?];
+                    vec![self.render("game.leaderboard.title", &locale, &BTreeMap::new())?];
                 for (index, row) in rows.into_iter().enumerate() {
                     let mut parameters = BTreeMap::new();
                     parameters.insert("rank", rank_medal(index + 1));
                     parameters.insert("user", row.user_id);
                     parameters.insert("points", row.points.to_string());
                     parameters.insert("wins", row.wins.to_string());
-                    lines.push(self.render("game.leaderboard.line", command, &parameters)?);
+                    lines.push(self.render("game.leaderboard.line", &locale, &parameters)?);
                 }
                 Ok((lines.join("\n"), false))
             }
@@ -89,7 +89,7 @@ impl GameScoreGatewaySink {
                     .map_err(|_| GatewayEventDispatchError)?;
                 if stats.points == 0 && stats.wins == 0 {
                     return Ok((
-                        self.render("game.stats.none", command, &BTreeMap::new())?,
+                        self.render("game.stats.none", &locale, &BTreeMap::new())?,
                         true,
                     ));
                 }
@@ -98,15 +98,15 @@ impl GameScoreGatewaySink {
                         let mut parameters = BTreeMap::new();
                         parameters.insert("rank", rank.to_string());
                         parameters.insert("total", stats.total.to_string());
-                        self.render("game.stats.rank", command, &parameters)?
+                        self.render("game.stats.rank", &locale, &parameters)?
                     }
-                    None => self.render("game.stats.unranked", command, &BTreeMap::new())?,
+                    None => self.render("game.stats.unranked", &locale, &BTreeMap::new())?,
                 };
                 let mut parameters = BTreeMap::new();
                 parameters.insert("points", stats.points.to_string());
                 parameters.insert("wins", stats.wins.to_string());
                 parameters.insert("rank", rank);
-                Ok((self.render("game.stats.body", command, &parameters)?, true))
+                Ok((self.render("game.stats.body", &locale, &parameters)?, true))
             }
         }
     }

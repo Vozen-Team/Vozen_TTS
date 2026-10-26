@@ -19,7 +19,9 @@ use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
 };
-use vozen_discord::{GatewayEventDispatchError, GatewayEventSink, GatewayState};
+use vozen_discord::{
+    GatewayEventDispatchError, GatewayEventSink, GatewayState, VoiceResponseLocalizer,
+};
 use vozen_store::{GuildConfigPatch, SqliteStore};
 
 pub const OPEN_ID: &str = "vozen:setup:open";
@@ -35,7 +37,7 @@ struct PendingSetup {
     channel: Option<ChannelId>,
     category: Option<ChannelId>,
     choose_category: bool,
-    pt: bool,
+    locale: String,
 }
 
 impl PendingSetup {
@@ -47,7 +49,7 @@ impl PendingSetup {
             channel: None,
             category: None,
             choose_category: false,
-            pt: false,
+            locale: "en".into(),
         }
     }
     fn permits(&self, guild: u64, user: u64, now: i64) -> bool {
@@ -56,23 +58,44 @@ impl PendingSetup {
             && now >= self.issued_at
             && now - self.issued_at < SESSION_TTL_MS
     }
-    fn text<'a>(&self, en: &'a str, pt: &'a str) -> &'a str {
-        if self.pt { pt } else { en }
+    fn text(&self, localizer: &VoiceResponseLocalizer, key: &str) -> String {
+        setup_text(localizer, &self.locale, key)
     }
 }
 
-pub fn welcome_components() -> Vec<CreateActionRow> {
+fn setup_text(localizer: &VoiceResponseLocalizer, locale: &str, key: &str) -> String {
+    localizer
+        .render_key(key, Some(locale), None, &BTreeMap::new())
+        .expect("setup keys exist in the checked translation contract")
+}
+
+pub fn welcome_components(
+    localizer: &VoiceResponseLocalizer,
+    locale: &str,
+) -> Vec<CreateActionRow> {
     vec![
         CreateActionRow::Buttons(vec![
             CreateButton::new_link("https://vozen.org/account/").label("Dashboard"),
-            CreateButton::new_link("https://vozen.org/terms").label("Terms of Service"),
-            CreateButton::new_link("https://vozen.org/privacy").label("Privacy Policy"),
+            CreateButton::new_link("https://vozen.org/terms").label(setup_text(
+                localizer,
+                locale,
+                "welcome.terms",
+            )),
+            CreateButton::new_link("https://vozen.org/privacy").label(setup_text(
+                localizer,
+                locale,
+                "welcome.privacy",
+            )),
         ]),
         CreateActionRow::Buttons(vec![
             CreateButton::new(OPEN_ID)
                 .style(ButtonStyle::Danger)
-                .label("Setup Vozen"),
-            CreateButton::new_link("https://vozen.org/docs/").label("Documentation"),
+                .label(setup_text(localizer, locale, "wizard.title")),
+            CreateButton::new_link("https://vozen.org/docs/").label(setup_text(
+                localizer,
+                locale,
+                "welcome.docs",
+            )),
         ]),
     ]
 }
@@ -120,7 +143,11 @@ fn existing_chat(
         .map(|c| c.id)
 }
 
-fn wizard_components(nonce: &str, session: &PendingSetup) -> Vec<CreateActionRow> {
+fn wizard_components(
+    nonce: &str,
+    session: &PendingSetup,
+    localizer: &VoiceResponseLocalizer,
+) -> Vec<CreateActionRow> {
     let id = |action| format!("{PREFIX}{nonce}:{action}");
     let mut rows = vec![CreateActionRow::SelectMenu(
         CreateSelectMenu::new(
@@ -130,10 +157,16 @@ fn wizard_components(nonce: &str, session: &PendingSetup) -> Vec<CreateActionRow
                 default_channels: session.channel.map(|c| vec![c]),
             },
         )
-        .placeholder(session.text(
-            "Choose the text channel to read",
-            "Escolhe o canal de texto para leitura",
-        ))
+        .placeholder(
+            localizer
+                .render_key(
+                    "setup.channelLine",
+                    Some(&session.locale),
+                    None,
+                    &BTreeMap::from([("channel", "…".into())]),
+                )
+                .expect("checked setup channel label"),
+        )
         .min_values(1)
         .max_values(1),
     )];
@@ -146,10 +179,7 @@ fn wizard_components(nonce: &str, session: &PendingSetup) -> Vec<CreateActionRow
                     default_channels: session.category.map(|c| vec![c]),
                 },
             )
-            .placeholder(session.text(
-                "Choose a category containing voice channels",
-                "Escolhe uma categoria com chamadas",
-            ))
+            .placeholder(session.text(localizer, "wizard.category"))
             .min_values(1)
             .max_values(1),
         ));
@@ -157,27 +187,26 @@ fn wizard_components(nonce: &str, session: &PendingSetup) -> Vec<CreateActionRow
     rows.push(CreateActionRow::Buttons(vec![
         CreateButton::new(id("create"))
             .style(ButtonStyle::Secondary)
-            .label(session.text("Create TTS Chat", "Criar TTS Chat")),
+            .label(session.text(localizer, "wizard.create")),
         CreateButton::new(id("confirm"))
             .style(ButtonStyle::Success)
-            .label(session.text("Enable reading", "Ativar leitura"))
+            .label(session.text(localizer, "wizard.confirm"))
             .disabled(session.channel.is_none()),
         CreateButton::new(id("cancel"))
             .style(ButtonStyle::Secondary)
-            .label(session.text("Cancel", "Cancelar")),
+            .label(session.text(localizer, "premium.confirmNo")),
     ]));
     rows
 }
 
-fn wizard_embed(session: &PendingSetup) -> CreateEmbed {
-    CreateEmbed::new().color(0x5865F2)
-        .title(session.text("Set up Vozen", "Configurar Vozen"))
-        .description(session.text(
-            "Choose a chat, or create **TTS Chat** in your voice category.\nConfirm to start reading.",
-            "Escolhe um chat ou cria **TTS Chat** na categoria das chamadas.\nConfirma para começar a leitura."))
-        .footer(CreateEmbedFooter::new(session.text(
-            "Creating a channel happens immediately.",
-            "A criação do canal é imediata.")))
+fn wizard_embed(session: &PendingSetup, localizer: &VoiceResponseLocalizer) -> CreateEmbed {
+    CreateEmbed::new()
+        .color(0x5865F2)
+        .title(session.text(localizer, "wizard.title"))
+        .description(session.text(localizer, "wizard.description"))
+        .footer(CreateEmbedFooter::new(
+            session.text(localizer, "wizard.immediate"),
+        ))
 }
 
 fn no_mentions() -> CreateAllowedMentions {
@@ -188,6 +217,7 @@ fn no_mentions() -> CreateAllowedMentions {
 }
 
 pub struct SetupGatewaySink {
+    localizer: VoiceResponseLocalizer,
     store: Arc<Mutex<SqliteStore>>,
     gateway: GatewayState,
     sessions: Mutex<BTreeMap<String, PendingSetup>>,
@@ -196,13 +226,59 @@ pub struct SetupGatewaySink {
 }
 
 impl SetupGatewaySink {
-    pub fn new(store: Arc<Mutex<SqliteStore>>, gateway: GatewayState) -> Self {
-        Self {
+    pub fn new(
+        store: Arc<Mutex<SqliteStore>>,
+        gateway: GatewayState,
+    ) -> Result<Self, GatewayEventDispatchError> {
+        Ok(Self {
+            localizer: VoiceResponseLocalizer::from_generated_contract()
+                .map_err(|_| GatewayEventDispatchError)?,
             store,
             gateway,
             sessions: Mutex::new(BTreeMap::new()),
             actions: tokio::sync::Mutex::new(()),
+        })
+    }
+
+    fn text(&self, locale: &str, key: &str) -> String {
+        setup_text(&self.localizer, locale, key)
+    }
+
+    fn permission_error(
+        &self,
+        locale: &str,
+        target: &str,
+        channel: Option<ChannelId>,
+        actual: Permissions,
+        required: Permissions,
+    ) -> String {
+        let mut lines = vec![
+            format!(
+                "{} {}",
+                target,
+                channel.map(|id| format!("<#{}>", id)).unwrap_or_default()
+            ),
+            self.text(locale, "setup.permsHeader"),
+        ];
+        for (flag, key) in [
+            (Permissions::MANAGE_CHANNELS, "wizard.manageChannels"),
+            (Permissions::VIEW_CHANNEL, "setup.permView"),
+            (Permissions::SEND_MESSAGES, "setup.permSend"),
+        ] {
+            if required.contains(flag) && !actual.contains(flag) {
+                lines.push(
+                    self.localizer
+                        .render_key(
+                            "setup.permMissing",
+                            Some(locale),
+                            None,
+                            &BTreeMap::from([("label", self.text(locale, key))]),
+                        )
+                        .expect("checked permission label"),
+                );
+            }
         }
+        lines.join("\n")
     }
 
     async fn open(
@@ -212,35 +288,34 @@ impl SetupGatewaySink {
         user_id: serenity::model::id::UserId,
         locale: &str,
     ) -> Result<(String, PendingSetup), String> {
+        let text = |key| self.text(locale, key);
         let guild = guild_id
             .to_partial_guild(&context.http)
             .await
-            .map_err(|_| "Could not load server permissions.")?;
+            .map_err(|_| text("error.generic"))?;
         let member = guild_id
             .member(&context.http, user_id)
             .await
-            .map_err(|_| "Could not verify your membership.")?;
+            .map_err(|_| text("error.generic"))?;
         if !guild
             .member_permissions(&member)
             .contains(Permissions::MANAGE_GUILD)
         {
-            return Err(
-                "You need Manage Server to configure Vozen. / Precisas de Gerir Servidor.".into(),
-            );
+            return Err(text("error.needManageGuild"));
         }
         let channels = guild_id
             .channels(&context.http)
             .await
-            .map_err(|_| "Could not load channels.")?;
+            .map_err(|_| text("error.generic"))?;
         let categories = voice_categories(&channels);
         let mut session = PendingSetup::new(guild_id.get(), user_id.get(), crate::system_now_ms());
-        session.pt = locale.starts_with("pt");
+        session.locale = locale.into();
         session.channel = self
             .store
             .lock()
-            .map_err(|_| "Setup storage unavailable.")?
+            .map_err(|_| text("error.generic"))?
             .guild_config(&guild_id.get().to_string())
-            .map_err(|_| "Setup storage unavailable.")?
+            .map_err(|_| text("error.generic"))?
             .tts_channel_id
             .and_then(|id| id.parse::<u64>().ok())
             .map(ChannelId::new)
@@ -259,10 +334,10 @@ impl SetupGatewaySink {
             .or_else(|| (categories.len() == 1).then(|| categories[0]));
         session.choose_category = categories.len() > 1;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
-        let mut sessions = self.sessions.lock().map_err(|_| "Setup unavailable.")?;
+        let mut sessions = self.sessions.lock().map_err(|_| text("error.generic"))?;
         sessions.retain(|_, s| crate::system_now_ms() - s.issued_at < SESSION_TTL_MS);
         if sessions.len() >= SESSION_LIMIT {
-            return Err("Setup is busy. Try again shortly.".into());
+            return Err(text("error.generic"));
         }
         sessions.insert(nonce.clone(), session.clone());
         Ok((nonce, session))
@@ -273,32 +348,31 @@ impl SetupGatewaySink {
         context: &Context,
         component: &serenity::model::application::ComponentInteraction,
     ) -> Result<EditInteractionResponse, String> {
+        let text = |key| self.text(&component.locale, key);
         let _guard = self.actions.lock().await;
-        let (nonce, action) = action_id(&component.data.custom_id)
-            .ok_or("Invalid setup action. Run /setup again.")?;
+        let (nonce, action) =
+            action_id(&component.data.custom_id).ok_or_else(|| text("wizard.reopen"))?;
         if matches!(action, "create" | "confirm" | "cancel")
             && !matches!(component.data.kind, ComponentInteractionDataKind::Button)
         {
-            return Err("Invalid setup button.".into());
+            return Err(text("wizard.reopen"));
         }
         let mut session = self
             .sessions
             .lock()
-            .map_err(|_| "Setup unavailable.")?
+            .map_err(|_| text("error.generic"))?
             .get(nonce)
             .cloned()
-            .ok_or("Setup expired. Run /setup again.")?;
-        let guild_id = component.guild_id.ok_or("Use setup inside a server.")?;
+            .ok_or_else(|| text("wizard.reopen"))?;
+        let guild_id = component.guild_id.ok_or_else(|| text("wizard.reopen"))?;
         if !session.permits(
             guild_id.get(),
             component.user.id.get(),
             crate::system_now_ms(),
         ) {
-            return Err(
-                "This setup belongs to another user/server or has expired. Run /setup again."
-                    .into(),
-            );
+            return Err(text("wizard.reopen"));
         }
+        session.locale = component.locale.clone();
         let terminal = |text: String| {
             EditInteractionResponse::new()
                 .content(text)
@@ -309,71 +383,80 @@ impl SetupGatewaySink {
         if action == "cancel" {
             self.sessions
                 .lock()
-                .map_err(|_| "Setup unavailable.")?
+                .map_err(|_| text("error.generic"))?
                 .remove(nonce);
-            return Ok(terminal(
-                session
-                    .text(
-                        "Setup cancelled. Reading settings were not changed.",
-                        "Configuração cancelada. As definições de leitura não foram alteradas.",
-                    )
-                    .into(),
-            ));
+            return Ok(terminal(text("wizard.cancelled")));
         }
         // Read current Discord permissions for every action, not the stale interaction snapshot.
         let guild = guild_id
             .to_partial_guild(&context.http)
             .await
-            .map_err(|_| "Could not load permissions.")?;
+            .map_err(|_| text("error.generic"))?;
         let member = guild_id
             .member(&context.http, component.user.id)
             .await
-            .map_err(|_| "Could not verify membership.")?;
+            .map_err(|_| text("error.generic"))?;
         if !guild
             .member_permissions(&member)
             .contains(Permissions::MANAGE_GUILD)
         {
-            return Err(
-                "You need Manage Server to configure Vozen. / Precisas de Gerir Servidor.".into(),
-            );
+            return Err(text("error.needManageGuild"));
         }
         let bot = context
             .http
             .get_current_user()
             .await
-            .map_err(|_| "Could not verify bot permissions.")?;
+            .map_err(|_| text("error.generic"))?;
         let bot_member = guild_id
             .member(&context.http, bot.id)
             .await
-            .map_err(|_| "Could not verify bot membership.")?;
+            .map_err(|_| text("error.generic"))?;
         let mut channels = guild_id
             .channels(&context.http)
             .await
-            .map_err(|_| "Could not load channels.")?;
-        let can_read = |c: &GuildChannel| {
-            c.kind == ChannelType::Text
-                && guild
-                    .user_permissions_in(c, &bot_member)
-                    .contains(Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES)
-                && guild
-                    .user_permissions_in(c, &member)
-                    .contains(Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES)
+            .map_err(|_| text("error.generic"))?;
+        let reading_error = |c: &GuildChannel| {
+            if c.kind != ChannelType::Text {
+                return Some(text("wizard.channelRequired"));
+            }
+            let required = Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES;
+            let bot_permissions = guild.user_permissions_in(c, &bot_member);
+            if !bot_permissions.contains(required) {
+                return Some(self.permission_error(
+                    &component.locale,
+                    "Vozen",
+                    Some(c.id),
+                    bot_permissions,
+                    required,
+                ));
+            }
+            let user_permissions = guild.user_permissions_in(c, &member);
+            if !user_permissions.contains(required) {
+                return Some(self.permission_error(
+                    &component.locale,
+                    &format!("<@{}>", component.user.id),
+                    Some(c.id),
+                    user_permissions,
+                    required,
+                ));
+            }
+            None
         };
         match action {
             "channel" | "category" => {
                 let ComponentInteractionDataKind::ChannelSelect { values } = &component.data.kind
                 else {
-                    return Err("Invalid channel selection.".into());
+                    return Err(text("wizard.reopen"));
                 };
                 if values.len() != 1 {
-                    return Err("Choose exactly one channel.".into());
+                    return Err(text("wizard.channelRequired"));
                 }
                 let channel = channels
                     .get(&values[0])
-                    .ok_or("That channel no longer exists.")?;
+                    .ok_or_else(|| text("wizard.reopen"))?;
                 if action == "channel" {
-                    if !can_read(channel) {
-                        return Err("You and Vozen need View Channel and Send Messages in that text channel.".into());
+                    if let Some(error) = reading_error(channel) {
+                        return Err(error);
                     }
                     session.channel = Some(channel.id);
                 } else {
@@ -382,7 +465,7 @@ impl SetupGatewaySink {
                             .user_permissions_in(channel, &member)
                             .contains(Permissions::VIEW_CHANNEL)
                     {
-                        return Err("Choose a visible category containing voice channels.".into());
+                        return Err(text("wizard.category"));
                     }
                     session.category = Some(channel.id);
                 }
@@ -390,71 +473,74 @@ impl SetupGatewaySink {
             "create" => {
                 let categories = voice_categories(&channels);
                 if session.category.is_some_and(|id| !categories.contains(&id)) {
-                    return Err("The voice category changed. Run /setup again.".into());
+                    return Err(text("wizard.reopen"));
                 }
                 if !categories.is_empty() && session.category.is_none() {
-                    return Err(session
-                        .text(
-                            "Choose the voice category first.",
-                            "Escolhe primeiro a categoria das chamadas.",
-                        )
-                        .into());
-                }
-                let permissions = session
-                    .category
-                    .and_then(|id| channels.get(&id))
-                    .map(|c| guild.user_permissions_in(c, &bot_member))
-                    .unwrap_or_else(|| guild.member_permissions(&bot_member));
-                if !permissions.contains(
-                    Permissions::MANAGE_CHANNELS
-                        | Permissions::VIEW_CHANNEL
-                        | Permissions::SEND_MESSAGES,
-                ) {
-                    return Err("Vozen needs Manage Channels, View Channel and Send Messages there. Choose an existing channel instead.".into());
+                    return Err(text("wizard.category"));
                 }
                 if let Some(category) = session.category.and_then(|id| channels.get(&id))
                     && !guild
                         .user_permissions_in(category, &member)
                         .contains(Permissions::VIEW_CHANNEL)
                 {
-                    return Err("You cannot access that category.".into());
+                    return Err(text("wizard.category"));
                 }
-                let existing = existing_chat(&channels, session.category, can_read);
+                let existing =
+                    existing_chat(&channels, session.category, |c| reading_error(c).is_none());
                 session.channel = match existing {
                     Some(id) => Some(id),
                     None => {
+                        // Reusing a readable channel does not require permission to create one.
+                        let permissions = session
+                            .category
+                            .and_then(|id| channels.get(&id))
+                            .map(|c| guild.user_permissions_in(c, &bot_member))
+                            .unwrap_or_else(|| guild.member_permissions(&bot_member));
+                        let required = Permissions::MANAGE_CHANNELS
+                            | Permissions::VIEW_CHANNEL
+                            | Permissions::SEND_MESSAGES;
+                        if !permissions.contains(required) {
+                            return Err(self.permission_error(
+                                &component.locale,
+                                "Vozen",
+                                session.category,
+                                permissions,
+                                required,
+                            ));
+                        }
                         let mut builder = CreateChannel::new("TTS Chat").kind(ChannelType::Text)
                             .topic("Write here for Vozen to read in your voice call. Use /join to connect.");
                         if let Some(parent) = session.category {
                             builder = builder.category(parent);
                         }
-                        let channel = guild_id.create_channel(&context.http, builder).await
-                            .map_err(|_| "Could not create TTS Chat. Check Manage Channels and try again.")?;
+                        let channel = guild_id
+                            .create_channel(&context.http, builder)
+                            .await
+                            .map_err(|_| text("error.generic"))?;
                         session.channel = Some(channel.id);
                         self.sessions
                             .lock()
-                            .map_err(|_| "Setup unavailable.")?
+                            .map_err(|_| text("error.generic"))?
                             .insert(nonce.into(), session.clone());
                         channels.insert(channel.id, channel.clone());
-                        if !can_read(&channel) {
-                            return Err("TTS Chat was created but category permissions block reading. Adjust permissions or select another channel.".into());
+                        if let Some(error) = reading_error(&channel) {
+                            return Err(format!("{}\n{}", text("wizard.createdUnreadable"), error));
                         }
                         Some(channel.id)
                     }
                 };
             }
             "confirm" => {
-                let channel_id = session.channel.ok_or("Choose a reading channel first.")?;
+                let channel_id = session
+                    .channel
+                    .ok_or_else(|| text("wizard.channelRequired"))?;
                 let channel = channels
                     .get(&channel_id)
-                    .ok_or("The selected channel no longer exists.")?;
-                if !can_read(channel) {
-                    return Err("Channel permissions changed. You and Vozen need View Channel and Send Messages.".into());
+                    .ok_or_else(|| text("wizard.reopen"))?;
+                if let Some(error) = reading_error(channel) {
+                    return Err(error);
                 }
-                let store = self
-                    .store
-                    .lock()
-                    .map_err(|_| "Setup storage unavailable.")?;
+                let store = self.store.lock().map_err(|_| text("error.generic"))?;
                 store
                     .update_guild_config(
                         &guild_id.get().to_string(),
@@ -464,27 +550,43 @@ impl SetupGatewaySink {
                             ..Default::default()
                         },
                     )
-                    .map_err(|_| "Could not save setup. Try again.")?;
-                store.record_guild_setup_completed(&guild_id.get().to_string(), crate::system_now_ms())
-                    .map_err(|_| "Reading channel saved, but setup reporting failed. Reopen /setup to verify.")?;
+                    .map_err(|_| text("error.generic"))?;
+                store
+                    .record_guild_setup_completed(
+                        &guild_id.get().to_string(),
+                        crate::system_now_ms(),
+                    )
+                    .map_err(|_| format!("{}\n{}", text("setup.done"), text("wizard.reopen")))?;
                 self.sessions
                     .lock()
-                    .map_err(|_| "Setup unavailable.")?
+                    .map_err(|_| text("error.generic"))?
                     .remove(nonce);
-                return Ok(terminal(format!("{} <#{}>\n{}", session.text("Reading enabled in", "Leitura ativada em"), channel_id,
-                    session.text("Join a voice channel, run /join, and write there. No voice channel or category was created.",
-                        "Entra numa chamada, usa /join e escreve nesse chat. Não foi criado nenhum canal de voz nem categoria."))));
+                let channel_line = self
+                    .localizer
+                    .render_key(
+                        "setup.channelLine",
+                        Some(&component.locale),
+                        None,
+                        &BTreeMap::from([("channel", format!("<#{}>", channel_id))]),
+                    )
+                    .expect("checked setup channel label");
+                return Ok(terminal(format!(
+                    "{}\n{}\n{}",
+                    text("setup.done"),
+                    channel_line,
+                    text("setup.allGood")
+                )));
             }
-            _ => return Err("Unknown setup action. Run /setup again.".into()),
+            _ => return Err(text("wizard.reopen")),
         }
         self.sessions
             .lock()
-            .map_err(|_| "Setup unavailable.")?
+            .map_err(|_| text("error.generic"))?
             .insert(nonce.into(), session.clone());
         Ok(EditInteractionResponse::new()
             .content("")
-            .embed(wizard_embed(&session))
-            .components(wizard_components(nonce, &session))
+            .embed(wizard_embed(&session, &self.localizer))
+            .components(wizard_components(nonce, &session, &self.localizer))
             .allowed_mentions(no_mentions()))
     }
 }
@@ -540,7 +642,7 @@ impl GatewayEventSink for SetupGatewaySink {
                     error => {
                         let text = match error {
                             Ok(Err(text)) => text,
-                            _ => "Setup timed out. Reopen /setup to verify before retrying.".into(),
+                            _ => self.text(&c.locale, "wizard.reopen"),
                         };
                         c.create_followup(
                             &context,
@@ -565,19 +667,19 @@ impl GatewayEventSink for SetupGatewaySink {
             .await
             {
                 Ok(Ok((nonce, session))) => EditInteractionResponse::new()
-                    .embed(wizard_embed(&session))
-                    .components(wizard_components(&nonce, &session))
+                    .embed(wizard_embed(&session, &self.localizer))
+                    .components(wizard_components(&nonce, &session, &self.localizer))
                     .allowed_mentions(no_mentions()),
                 other => EditInteractionResponse::new()
                     .content(match other {
                         Ok(Err(text)) => text,
-                        _ => "Setup could not load. Try /setup again.".into(),
+                        _ => self.text(locale, "wizard.reopen"),
                     })
                     .allowed_mentions(no_mentions()),
             }
         } else {
             EditInteractionResponse::new()
-                .content("Use /setup inside a server.")
+                .content(self.text(locale, "wizard.reopen"))
                 .allowed_mentions(no_mentions())
         };
         match &interaction {
@@ -672,11 +774,12 @@ mod tests {
 
     #[test]
     fn confirming_is_enabled_only_after_selection_and_category_picker_is_conditional() {
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
         let mut session = PendingSetup::new(7, 42, 100);
-        session.pt = true;
+        session.locale = "pt-PT".into();
         session.choose_category = true;
         session.channel = Some(ChannelId::new(77));
-        let rows = serde_json::to_value(wizard_components("nonce", &session)).unwrap();
+        let rows = serde_json::to_value(wizard_components("nonce", &session, &localizer)).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 3);
         assert_eq!(
             rows[1]["components"][0]["channel_types"],
@@ -684,7 +787,7 @@ mod tests {
         );
         assert_eq!(rows[2]["components"][1]["disabled"], false);
         assert_eq!(rows[2]["components"][1]["label"], "Ativar leitura");
-        let embed = serde_json::to_value(wizard_embed(&session)).unwrap();
+        let embed = serde_json::to_value(wizard_embed(&session, &localizer)).unwrap();
         assert!(embed["fields"].is_null());
         assert_eq!(rows[0]["components"][0]["default_values"][0]["id"], 77);
     }
@@ -694,7 +797,8 @@ mod tests {
         let sink = SetupGatewaySink::new(
             Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap())),
             GatewayState::default(),
-        );
+        )
+        .unwrap();
         sink.sessions
             .lock()
             .unwrap()
@@ -730,7 +834,8 @@ mod tests {
 
     #[test]
     fn welcome_has_five_labelled_buttons_and_a_red_setup_action() {
-        let rows = serde_json::to_value(welcome_components()).unwrap();
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
+        let rows = serde_json::to_value(welcome_components(&localizer, "en")).unwrap();
         let buttons: Vec<_> = rows
             .as_array()
             .unwrap()
@@ -743,7 +848,7 @@ mod tests {
             .find(|button| button["custom_id"] == OPEN_ID)
             .unwrap();
         assert_eq!(setup["style"], 4);
-        assert_eq!(setup["label"], "Setup Vozen");
+        assert_eq!(setup["label"], "Set up Vozen");
         assert_eq!(buttons[0]["url"], "https://vozen.org/account/");
         assert_eq!(buttons[1]["label"], "Terms of Service");
         assert_eq!(buttons[2]["label"], "Privacy Policy");
@@ -756,13 +861,78 @@ mod tests {
 
     #[test]
     fn wizard_never_saves_on_open_and_requires_a_channel_to_confirm() {
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
         let session = PendingSetup::new(7, 42, 100);
-        let rows = serde_json::to_value(wizard_components("nonce", &session)).unwrap();
+        let rows = serde_json::to_value(wizard_components("nonce", &session, &localizer)).unwrap();
         assert_eq!(
             rows[0]["components"][0]["channel_types"],
             serde_json::json!([0])
         );
         assert_eq!(rows[1]["components"][1]["disabled"], true);
         assert_eq!(rows[1]["components"][0]["label"], "Create TTS Chat");
+    }
+
+    #[test]
+    fn permission_failure_uses_the_actor_locale_and_only_lists_missing_permissions() {
+        let sink = SetupGatewaySink::new(
+            Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap())),
+            GatewayState::default(),
+        )
+        .unwrap();
+        let required =
+            Permissions::MANAGE_CHANNELS | Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES;
+        let message = sink.permission_error(
+            "pt-BR",
+            "Vozen",
+            Some(ChannelId::new(77)),
+            Permissions::SEND_MESSAGES,
+            required,
+        );
+        assert!(message.contains("Gerir Canais") && message.contains("<#77>"));
+        assert!(message.contains("ViewChannel") && !message.contains("SendMessages"));
+        assert!(!message.contains("Vozen needs") && !message.contains("Manage Channels"));
+        let french = sink.permission_error(
+            "fr",
+            "Vozen",
+            None,
+            Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES,
+            required,
+        );
+        assert!(french.contains("Gérer les salons"));
+        assert!(!french.contains("ViewChannel") && !french.contains("SendMessages"));
+    }
+
+    #[test]
+    fn setup_copy_covers_every_supported_locale_and_discord_region_variants() {
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/voice-response-i18n.json"))
+                .unwrap();
+        for locale in catalog["supported_locales"].as_array().unwrap() {
+            let mut session = PendingSetup::new(7, 42, 100);
+            session.locale = locale.as_str().unwrap().to_owned();
+            let rows =
+                serde_json::to_value(wizard_components("nonce", &session, &localizer)).unwrap();
+            assert!(
+                !rows[1]["components"][0]["label"]
+                    .as_str()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(!session.text(&localizer, "wizard.reopen").is_empty());
+            assert!(session.text(&localizer, "wizard.reopen").contains("/setup"));
+        }
+        assert_eq!(
+            setup_text(&localizer, "pt-PT", "wizard.confirm"),
+            "Ativar leitura"
+        );
+        assert_eq!(
+            setup_text(&localizer, "fr-CA", "wizard.confirm"),
+            "Activer la lecture"
+        );
+        assert_eq!(
+            setup_text(&localizer, "unknown", "wizard.confirm"),
+            "Enable reading"
+        );
     }
 }

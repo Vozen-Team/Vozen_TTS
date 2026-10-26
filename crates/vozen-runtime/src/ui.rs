@@ -1,6 +1,26 @@
 //! Shared presentation helpers for Rust responses.
 
 use serenity::builder::CreateEmbed;
+use serenity::model::id::GuildId;
+use std::sync::Mutex;
+use vozen_discord::GatewayEventDispatchError;
+use vozen_store::SqliteStore;
+
+/// Public copy follows the saved server setting, never the command author's client language.
+pub fn guild_locale(
+    store: &Mutex<SqliteStore>,
+    guild: Option<GuildId>,
+) -> Result<String, GatewayEventDispatchError> {
+    let Some(guild) = guild else {
+        return Ok("en".into());
+    };
+    store
+        .lock()
+        .map_err(|_| GatewayEventDispatchError)?
+        .guild_config(&guild.to_string())
+        .map(|config| config.locale)
+        .map_err(|_| GatewayEventDispatchError)
+}
 
 pub const BRAND_COLOR: u32 = 0x5865F2;
 const SUCCESS_COLOR: u32 = 0x57F287;
@@ -46,6 +66,26 @@ pub fn color_for_content(content: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_locale_defaults_to_english_and_is_scoped_to_the_saved_server() {
+        let store = Mutex::new(SqliteStore::open_in_memory().unwrap());
+        assert_eq!(guild_locale(&store, Some(GuildId::new(7))).unwrap(), "en");
+        store
+            .lock()
+            .unwrap()
+            .update_guild_config(
+                "7",
+                vozen_store::GuildConfigPatch {
+                    locale: Some("pt".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(guild_locale(&store, Some(GuildId::new(7))).unwrap(), "pt");
+        assert_eq!(guild_locale(&store, Some(GuildId::new(8))).unwrap(), "en");
+        assert_eq!(guild_locale(&store, None).unwrap(), "en");
+    }
 
     #[test]
     fn card_tone_matches_typescript_semantic_marks() {

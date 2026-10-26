@@ -15,19 +15,38 @@ use serenity::{
         guild::{Guild, Member},
     },
 };
-use vozen_discord::{GatewayEventDispatchError, GatewayEventSink};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+use vozen_discord::{GatewayEventDispatchError, GatewayEventSink, VoiceResponseLocalizer};
+use vozen_store::SqliteStore;
 
-pub struct GuildWelcomeGatewaySink;
+pub struct GuildWelcomeGatewaySink {
+    store: Arc<Mutex<SqliteStore>>,
+    localizer: VoiceResponseLocalizer,
+}
 
 impl GuildWelcomeGatewaySink {
-    fn welcome_embed() -> CreateEmbed {
+    pub fn new(store: Arc<Mutex<SqliteStore>>) -> Result<Self, GatewayEventDispatchError> {
+        Ok(Self {
+            store,
+            localizer: VoiceResponseLocalizer::from_generated_contract()
+                .map_err(|_| GatewayEventDispatchError)?,
+        })
+    }
+
+    fn welcome_embed(&self, locale: &str) -> CreateEmbed {
+        let text = |key| {
+            self.localizer
+                .render_key(key, None, Some(locale), &BTreeMap::new())
+                .expect("welcome keys exist in the checked translation contract")
+        };
         CreateEmbed::new()
             .color(0x5865F2)
-            .title("Welcome to Vozen")
-            .description(
-                "Text to speech, no mic needed.\n\n**1.** Choose a chat with `/setup`.\n**2.** Join a voice channel and use `/join`.\n**3.** Type in your TTS chat.",
-            )
-            .footer(CreateEmbedFooter::new("Setup requires Manage Server."))
+            .title(text("welcome.title"))
+            .description(text("welcome.description"))
+            .footer(CreateEmbedFooter::new(text("error.needManageGuild")))
     }
 
     fn can_post(guild: &Guild, channel: &GuildChannel, member: &Member) -> bool {
@@ -91,9 +110,13 @@ impl GatewayEventSink for GuildWelcomeGatewaySink {
         let Some(channel) = Self::pick_channel(&guild, &member) else {
             return Ok(());
         };
+        let locale = crate::ui::guild_locale(&self.store, Some(guild.id))?;
         let message = CreateMessage::new()
-            .embed(Self::welcome_embed())
-            .components(crate::setup_wizard::welcome_components())
+            .embed(self.welcome_embed(&locale))
+            .components(crate::setup_wizard::welcome_components(
+                &self.localizer,
+                &locale,
+            ))
             .allowed_mentions(no_mentions());
         channel
             .id
@@ -127,10 +150,17 @@ mod tests {
 
     #[test]
     fn welcome_preview_payload_has_three_steps_and_shared_setup_button() {
+        let sink = GuildWelcomeGatewaySink::new(Arc::new(Mutex::new(
+            SqliteStore::open_in_memory().unwrap(),
+        )))
+        .unwrap();
         let payload = serde_json::to_value(
             CreateMessage::new()
-                .embed(GuildWelcomeGatewaySink::welcome_embed())
-                .components(crate::setup_wizard::welcome_components())
+                .embed(sink.welcome_embed("en"))
+                .components(crate::setup_wizard::welcome_components(
+                    &sink.localizer,
+                    "en",
+                ))
                 .allowed_mentions(no_mentions()),
         )
         .unwrap();
@@ -144,6 +174,22 @@ mod tests {
             crate::setup_wizard::OPEN_ID
         );
         println!("WELCOME_PREVIEW={payload}");
+    }
+
+    #[test]
+    fn welcome_copy_and_buttons_follow_the_configured_public_language() {
+        let sink = GuildWelcomeGatewaySink::new(Arc::new(Mutex::new(
+            SqliteStore::open_in_memory().unwrap(),
+        )))
+        .unwrap();
+        let embed = serde_json::to_value(sink.welcome_embed("pt")).unwrap();
+        assert_eq!(embed["title"], "Bem-vindo ao Vozen");
+        let buttons = serde_json::to_value(crate::setup_wizard::welcome_components(
+            &sink.localizer,
+            "pt",
+        ))
+        .unwrap();
+        assert_eq!(buttons[1]["components"][0]["label"], "Configurar Vozen");
     }
 
     #[test]
