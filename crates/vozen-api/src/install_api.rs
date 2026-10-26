@@ -27,7 +27,7 @@ type HmacSha256 = Hmac<Sha256>;
 const STATE_TTL_MS: i64 = 10 * 60 * 1_000;
 const DISCORD_TOKEN_ENDPOINT: &str = "https://discord.com/api/v10/oauth2/token";
 const DISCORD_AUTHORIZE_ENDPOINT: &str = "https://discord.com/oauth2/authorize";
-const TTS_PERMISSIONS: &str = "326420745216";
+const TTS_PERMISSIONS: &str = "326420745232";
 
 #[derive(Clone)]
 pub struct InstallApiConfig {
@@ -340,6 +340,13 @@ impl IntoResponse for InstallResponseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installation_adds_only_manage_channels_to_existing_permissions() {
+        let permissions: u64 = TTS_PERMISSIONS.parse().unwrap();
+        assert_eq!(permissions, 326420745216 | 16);
+        assert_eq!(permissions & 8, 0);
+    }
+
     #[test]
     fn installed_guild_requires_the_trusted_token_response() {
         assert_eq!(

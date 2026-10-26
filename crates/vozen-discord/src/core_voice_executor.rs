@@ -196,8 +196,16 @@ where
             .localizer
             .render(
                 response,
-                interaction_locale,
-                guild_locale.as_deref(),
+                if defer_ephemeral {
+                    interaction_locale
+                } else {
+                    None
+                },
+                if defer_ephemeral {
+                    None
+                } else {
+                    guild_locale.as_deref()
+                },
                 &parameters,
             )
             .ok_or(CoreVoiceExecutionError::MissingResponse)?;
@@ -234,14 +242,9 @@ where
         facts: &CoreVoiceInteractionFacts,
         interaction_locale: Option<&str>,
     ) -> Result<String, CoreVoiceExecutionError> {
-        let (response, parameters, guild_locale) = self.response_context(outcome, facts);
+        let (response, parameters, _) = self.response_context(outcome, facts);
         self.localizer
-            .render(
-                response,
-                interaction_locale,
-                guild_locale.as_deref(),
-                &parameters,
-            )
+            .render(response, interaction_locale, None, &parameters)
             .ok_or(CoreVoiceExecutionError::MissingResponse)
     }
 
@@ -436,6 +439,143 @@ fn preview_locale_for_model(model: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        CommandPlaybackError, CommandPlaybackState, CommandSynthesisError,
+        VoiceSessionTransportError,
+    };
+    use async_trait::async_trait;
+    use std::path::{Path, PathBuf};
+    use vozen_core::{QueueEnqueueOptions, QueueLane, SynthRequest, SynthesisEngine};
+
+    struct NoAudio;
+    #[async_trait]
+    impl VoiceSessionTransport for NoAudio {
+        async fn join(&self, _: &str, _: &str) -> Result<(), VoiceSessionTransportError> {
+            panic!("voice must not be joined")
+        }
+        async fn leave(&self, _: &str) -> Result<(), VoiceSessionTransportError> {
+            panic!("voice must not be left")
+        }
+    }
+    #[async_trait]
+    impl CommandSpeechSynthesizer for NoAudio {
+        async fn synthesize(&self, _: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
+            panic!("no authorized voice session")
+        }
+    }
+    #[async_trait]
+    impl CommandVoicePlayback for NoAudio {
+        async fn state(&self, _: &str) -> Result<CommandPlaybackState, CommandPlaybackError> {
+            Ok(CommandPlaybackState::NoSession)
+        }
+        async fn reserve(&self, _: &str, _: QueueLane) -> Result<bool, CommandPlaybackError> {
+            panic!("no authorized voice session")
+        }
+        async fn enqueue_reserved(
+            &self,
+            _: &str,
+            _: &Path,
+            _: QueueEnqueueOptions<'_>,
+        ) -> Result<(), CommandPlaybackError> {
+            panic!("no authorized voice session")
+        }
+        async fn cancel_reservation(
+            &self,
+            _: &str,
+            _: QueueLane,
+        ) -> Result<(), CommandPlaybackError> {
+            panic!("no authorized voice session")
+        }
+        async fn skip(&self, _: &str) -> Result<(), CommandPlaybackError> {
+            panic!("no authorized voice session")
+        }
+        async fn silence(&self, _: &str) -> Result<(), CommandPlaybackError> {
+            panic!("no authorized voice session")
+        }
+    }
+
+    #[tokio::test]
+    async fn private_responses_follow_the_user_and_public_responses_follow_saved_server_language() {
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        let executor = CoreVoiceInteractionExecutor::new(
+            store.clone(),
+            GatewayState::default(),
+            NoAudio,
+            NoAudio,
+            NoAudio,
+            CoreVoiceSettings {
+                available_models: vec!["en_US-amy-medium".into()],
+                default_voice: "en_US-amy-medium".into(),
+                default_speed: 1.0,
+                default_engine: SynthesisEngine::Piper,
+            },
+            Arc::new(|| 100),
+        )
+        .unwrap();
+        let facts = CoreVoiceInteractionFacts {
+            guild_id: "7".into(),
+            channel_id: "77".into(),
+            user_id: "42".into(),
+            member_role_ids: Some(vec![]),
+        };
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
+        for (saved, user, private) in [
+            ("en", "pt-BR", false),
+            ("pt", "en-US", false),
+            ("en", "pt-PT", true),
+            ("pt", "fr-CA", true),
+        ] {
+            store
+                .lock()
+                .unwrap()
+                .update_guild_config(
+                    "7",
+                    vozen_store::GuildConfigPatch {
+                        locale: Some(saved.into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let data = if private {
+                command(
+                    r#"{"id":"1","name":"tts","type":1,"options":[{"name":"text","type":3,"value":"hello"}]}"#,
+                )
+            } else {
+                command(r#"{"id":"1","name":"join","type":1,"options":[]}"#)
+            };
+            let result = executor
+                .execute(&data, &facts, Some(user), &|_| "someone".into(), &|_| {
+                    "channel".into()
+                })
+                .await
+                .unwrap();
+            let CoreVoiceInteractionExecution::Reply {
+                content,
+                defer_ephemeral,
+                ..
+            } = result
+            else {
+                panic!("claimed command")
+            };
+            assert_eq!(defer_ephemeral, private);
+            let expected = localizer
+                .render_key(
+                    if private {
+                        "tts.notInVoice"
+                    } else {
+                        "join.needVoiceChannel"
+                    },
+                    Some(if private { user } else { saved }),
+                    None,
+                    &BTreeMap::new(),
+                )
+                .unwrap();
+            assert_eq!(
+                content, expected,
+                "saved={saved}, user={user}, private={private}"
+            );
+        }
+    }
 
     fn command(payload: &str) -> CommandData {
         serde_json::from_str(payload).expect("valid command data")

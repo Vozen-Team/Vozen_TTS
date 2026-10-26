@@ -45,15 +45,11 @@ impl VoteGatewaySink {
         &self,
         command: &serenity::model::application::CommandInteraction,
     ) -> Result<(String, Option<(String, String)>), GatewayEventDispatchError> {
+        let locale = crate::ui::guild_locale(&self.store, command.guild_id)?;
         let Some(client_id) = self.client_id.as_deref().filter(|id| !id.trim().is_empty()) else {
             return Ok((
                 self.localizer
-                    .render_key(
-                        "vote.noClientId",
-                        Some(&command.locale),
-                        command.guild_locale.as_deref(),
-                        &BTreeMap::new(),
-                    )
+                    .render_key("vote.noClientId", None, Some(&locale), &BTreeMap::new())
                     .ok_or(GatewayEventDispatchError)?,
                 None,
             ));
@@ -64,12 +60,7 @@ impl VoteGatewaySink {
         parameters.insert("url", url.clone());
         let mut content = self
             .localizer
-            .render_key(
-                "vote.link",
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
-                &parameters,
-            )
+            .render_key("vote.link", None, Some(&locale), &parameters)
             .ok_or(GatewayEventDispatchError)?;
         if let Some(secret) = self
             .redemption_secret
@@ -88,17 +79,12 @@ impl VoteGatewaySink {
                 .is_some_and(|status| !status.eligible);
             if limit_reached {
                 content.push_str("\n\n");
-                content.push_str(rolling_limit_notice(&command.locale));
+                content.push_str(rolling_limit_notice(&locale));
             }
         }
         let button_label = self
             .localizer
-            .render_key(
-                "vote.button",
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
-                &BTreeMap::new(),
-            )
+            .render_key("vote.button", None, Some(&locale), &BTreeMap::new())
             .ok_or(GatewayEventDispatchError)?;
         Ok((content, Some((url, button_label))))
     }

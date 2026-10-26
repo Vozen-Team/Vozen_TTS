@@ -614,7 +614,14 @@ impl GameRuntime {
                 active_channel_id.as_deref(),
             );
         }
-        let game_locale = language.as_deref().unwrap_or(&locale).to_owned();
+        let server_locale = self
+            .store
+            .lock()
+            .map_err(|_| GatewayEventDispatchError)?
+            .guild_config(&guild_id)
+            .map_err(|_| GatewayEventDispatchError)?
+            .locale;
+        let game_locale = language.as_deref().unwrap_or(&server_locale).to_owned();
         let game_name = vozen_discord::game_definition(game_id)
             .and_then(|definition| {
                 self.render(
@@ -643,7 +650,7 @@ impl GameRuntime {
                 starter_id: user_id,
                 game_id: Some(game_id.to_owned()),
                 language,
-                locale: locale.clone(),
+                locale: server_locale.clone(),
                 bot_voice_channel_id,
                 user_premium,
                 guild_premium,
@@ -693,8 +700,8 @@ impl GameRuntime {
             parameters.insert("channel", thread_id);
             self.render(
                 "game.start.startedThread",
-                Some(&locale),
-                guild_locale.as_deref(),
+                None,
+                Some(&server_locale),
                 &parameters,
             )
         } else {
@@ -702,8 +709,8 @@ impl GameRuntime {
             parameters.insert("game", game_name);
             self.render(
                 "game.start.started",
-                Some(&locale),
-                guild_locale.as_deref(),
+                None,
+                Some(&server_locale),
                 &parameters,
             )
         }
@@ -986,7 +993,14 @@ impl GameRuntime {
         {
             if play.game.is_none() {
                 let locale = command.locale.clone();
-                let guild_locale = command.guild_locale.clone();
+                let guild_locale = Some(
+                    self.store
+                        .lock()
+                        .map_err(|_| GatewayEventDispatchError)?
+                        .guild_config(&guild_id)
+                        .map_err(|_| GatewayEventDispatchError)?
+                        .locale,
+                );
                 let selected_language = play
                     .language
                     .as_deref()
@@ -995,7 +1009,9 @@ impl GameRuntime {
                             .iter()
                             .any(|(value, _)| value == language)
                     })
-                    .unwrap_or_else(|| Self::default_game_language(&locale))
+                    .unwrap_or_else(|| {
+                        Self::default_game_language(guild_locale.as_deref().unwrap_or("en"))
+                    })
                     .to_owned();
                 let (content, rows) = self.game_pick_components(
                     &command.id.get().to_string(),

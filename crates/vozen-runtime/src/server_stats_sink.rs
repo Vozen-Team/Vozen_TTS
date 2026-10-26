@@ -42,16 +42,11 @@ impl ServerStatsGatewaySink {
     fn message(
         &self,
         key: &str,
-        command: &serenity::model::application::CommandInteraction,
+        locale: &str,
         parameters: &BTreeMap<&str, String>,
     ) -> Result<String, GatewayEventDispatchError> {
         self.localizer
-            .render_key(
-                key,
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
-                parameters,
-            )
+            .render_key(key, None, Some(locale), parameters)
             .ok_or(GatewayEventDispatchError)
     }
 
@@ -59,8 +54,9 @@ impl ServerStatsGatewaySink {
         &self,
         command: &serenity::model::application::CommandInteraction,
     ) -> Result<String, GatewayEventDispatchError> {
+        let locale = crate::ui::guild_locale(&self.store, command.guild_id)?;
         let Some(guild_id) = command.guild_id else {
-            return self.message("serverstats.empty", command, &BTreeMap::new());
+            return self.message("serverstats.empty", &locale, &BTreeMap::new());
         };
         let guild_id = guild_id.get().to_string();
         let user_id = command.user.id.get().to_string();
@@ -80,16 +76,16 @@ impl ServerStatsGatewaySink {
             .guild_game_stats(&guild_id, if premium { 5 } else { 0 })
             .map_err(|_| GatewayEventDispatchError)?;
         if stats.messages == 0 && games.players == 0 {
-            return self.message("serverstats.empty", command, &BTreeMap::new());
+            return self.message("serverstats.empty", &locale, &BTreeMap::new());
         }
 
-        let mut lines = vec![self.message("serverstats.title", command, &BTreeMap::new())?];
+        let mut lines = vec![self.message("serverstats.title", &locale, &BTreeMap::new())?];
         let mut parameters = BTreeMap::new();
         parameters.insert("total", stats.messages.to_string());
         parameters.insert("speakers", stats.speakers.to_string());
-        lines.push(self.message("serverstats.messages", command, &parameters)?);
+        lines.push(self.message("serverstats.messages", &locale, &parameters)?);
         if !stats.top_speakers.is_empty() {
-            lines.push(self.message("serverstats.topTalkers", command, &BTreeMap::new())?);
+            lines.push(self.message("serverstats.topTalkers", &locale, &BTreeMap::new())?);
             for (index, row) in stats.top_speakers.into_iter().enumerate() {
                 let mut parameters = BTreeMap::new();
                 parameters.insert("rank", (index + 1).to_string());
@@ -97,33 +93,33 @@ impl ServerStatsGatewaySink {
                 parameters.insert("user", row.user_id);
                 parameters.insert("count", row.count.to_string());
                 parameters.insert("streak", streak.to_string());
-                let line = self.message("serverstats.talkerLine", command, &parameters)?;
+                let line = self.message("serverstats.talkerLine", &locale, &parameters)?;
                 lines.push(style_streak_message(line, streak));
             }
         }
         if premium {
             let mut parameters = BTreeMap::new();
             parameters.insert("days", stats.streak.to_string());
-            let line = self.message("serverstats.streak", command, &parameters)?;
+            let line = self.message("serverstats.streak", &locale, &parameters)?;
             lines.push(style_streak_message(line, stats.streak));
             let mut parameters = BTreeMap::new();
             parameters.insert("points", games.points.to_string());
             parameters.insert("wins", games.wins.to_string());
             parameters.insert("players", games.players.to_string());
-            lines.push(self.message("serverstats.games", command, &parameters)?);
+            lines.push(self.message("serverstats.games", &locale, &parameters)?);
             if !games.top_players.is_empty() {
-                lines.push(self.message("serverstats.topPlayers", command, &BTreeMap::new())?);
+                lines.push(self.message("serverstats.topPlayers", &locale, &BTreeMap::new())?);
                 for (index, row) in games.top_players.into_iter().enumerate() {
                     let mut parameters = BTreeMap::new();
                     parameters.insert("rank", (index + 1).to_string());
                     parameters.insert("user", row.user_id);
                     parameters.insert("points", row.points.to_string());
                     parameters.insert("wins", row.wins.to_string());
-                    lines.push(self.message("serverstats.playerLine", command, &parameters)?);
+                    lines.push(self.message("serverstats.playerLine", &locale, &parameters)?);
                 }
             }
         } else {
-            lines.push(self.message("serverstats.upsell", command, &BTreeMap::new())?);
+            lines.push(self.message("serverstats.upsell", &locale, &BTreeMap::new())?);
             if let (Some(client_id), Some(secret)) = (&self.client_id, &self.redemption_secret)
                 && secret.len() >= VOTE_REDEMPTION_SECRET_MIN_LENGTH
                 && store
@@ -133,7 +129,7 @@ impl ServerStatsGatewaySink {
             {
                 let mut parameters = BTreeMap::new();
                 parameters.insert("url", format!("https://top.gg/bot/{client_id}/vote"));
-                lines.push(self.message("vote.upsell", command, &parameters)?);
+                lines.push(self.message("vote.upsell", &locale, &parameters)?);
             }
         }
         Ok(lines.join("\n"))

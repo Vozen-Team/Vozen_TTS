@@ -39,8 +39,8 @@ impl TopSpeakersGatewaySink {
         self.localizer
             .render_key(
                 key,
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
+                None,
+                Some(&crate::ui::guild_locale(&self.store, command.guild_id)?),
                 parameters,
             )
             .ok_or(GatewayEventDispatchError)

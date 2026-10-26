@@ -1,6 +1,8 @@
 //! Opt-in gateway adapter for the read-only `/game list` leaf.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use vozen_store::SqliteStore;
 
 use crate::ui::message_embed;
 use serenity::{
@@ -14,12 +16,14 @@ use vozen_discord::{
 };
 
 pub struct GameListGatewaySink {
+    store: Arc<Mutex<SqliteStore>>,
     localizer: VoiceResponseLocalizer,
 }
 
 impl GameListGatewaySink {
-    pub fn new() -> Result<Self, GatewayEventDispatchError> {
+    pub fn new(store: Arc<Mutex<SqliteStore>>) -> Result<Self, GatewayEventDispatchError> {
         Ok(Self {
+            store,
             localizer: VoiceResponseLocalizer::from_generated_contract()
                 .map_err(|_| GatewayEventDispatchError)?,
         })
@@ -34,8 +38,8 @@ impl GameListGatewaySink {
         self.localizer
             .render_key(
                 key,
-                Some(&command.locale),
-                command.guild_locale.as_deref(),
+                None,
+                Some(&crate::ui::guild_locale(&self.store, command.guild_id)?),
                 parameters,
             )
             .ok_or(GatewayEventDispatchError)
