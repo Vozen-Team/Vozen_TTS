@@ -14,7 +14,7 @@ use vozen_discord::{
     GatewayEventDispatchError, GatewayEventSink, VoiceResponseLocalizer, parse_invite_command,
 };
 
-pub const INVITE_PERMISSIONS: &str = "326420745216";
+pub const INVITE_PERMISSIONS: &str = "326420745232";
 
 pub struct InviteGatewaySink {
     client_id: Option<String>,
@@ -130,7 +130,7 @@ mod tests {
         );
         assert_eq!(
             url,
-            "https://discord.com/oauth2/authorize?client_id=123&permissions=326420745216&scope=bot%20applications.commands"
+            "https://discord.com/oauth2/authorize?client_id=123&permissions=326420745232&scope=bot%20applications.commands"
         );
     }
 }

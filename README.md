@@ -5,7 +5,7 @@
 <p align="center"><em>type it, hear it.</em></p>
 
 <p align="center">
-  <a href="https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745216&scope=bot%20applications.commands"><img src="https://img.shields.io/badge/Add%20to-Discord-5865F2?logo=discord&logoColor=white" alt="Add to Discord"></a>
+  <a href="https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745232&scope=bot%20applications.commands"><img src="https://img.shields.io/badge/Add%20to-Discord-5865F2?logo=discord&logoColor=white" alt="Add to Discord"></a>
   <a href="https://vozen.org"><img src="https://img.shields.io/badge/website-vozen.org-7c5cff" alt="Website"></a>
   <a href="https://discord.gg/4kYw2WUbNN"><img src="https://img.shields.io/badge/support-server-5865F2?logo=discord&logoColor=white" alt="Support server"></a>
   <a href="https://top.gg/bot/1523826014935842997/vote"><img src="https://img.shields.io/badge/vote-top.gg-ff3366" alt="Vote on top.gg"></a>
@@ -23,7 +23,7 @@ of going quiet for hours.
 
 ## Add it
 
-**[→ Add Vozen to your server](https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745216&scope=bot%20applications.commands)**
+**[→ Add Vozen to your server](https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745232&scope=bot%20applications.commands)**
 
 Then run **`/setup`** — it picks the channel to read and turns auto-read on. Join a
 voice channel, type in the text channel, and you're done.
@@ -94,7 +94,7 @@ there is nothing easier than inviting the hosted bot:
 
 | Level      | Who it's for                             | How                                                                                                                                                                         |
 | ---------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Easy**   | Everyone                                 | [Invite the public bot](https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745216&scope=bot%20applications.commands) — nothing to install |
+| **Easy**   | Everyone                                 | [Invite the public bot](https://discord.com/oauth2/authorize?client_id=1523826014935842997&permissions=326420745232&scope=bot%20applications.commands) — nothing to install |
 | **Normal** | You want it on your own VPS              | `docker compose -f docker-compose.rust.prod.yml` — [Rust self-hosting guide](docs/SELF-HOST.md)                                                                             |
 | **Hard**   | You want to change it or tune the voices | Rust workspace + Piper/models — [development checks](docs/SELF-HOST.md#development-checks)                                                                                  |
 
