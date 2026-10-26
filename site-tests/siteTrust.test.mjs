@@ -4,7 +4,7 @@ import { parse } from 'parse5';
 import { describe, expect, it } from 'vitest';
 const source = (path) => readFileSync(resolve(process.cwd(), path), { encoding: 'utf8' });
 const CLIENT_ID = '1523826014935842997';
-const CANONICAL_PERMISSIONS = '326420745216';
+const CANONICAL_PERMISSIONS = '326420745232';
 const INVITE_PERMISSIONS = CANONICAL_PERMISSIONS;
 const USER_ERASE_TABLES = ['talk_usage'];
 const GUILD_PURGE_TABLES = ['talk_usage'];
