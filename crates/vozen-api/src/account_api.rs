@@ -355,7 +355,7 @@ mod tests {
 
     fn router(store: Arc<Mutex<SqliteStore>>) -> Router {
         account_router(AccountApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             store,
             identity_verifier: Arc::new(Identities),
             now: Arc::new(|| 1_000),

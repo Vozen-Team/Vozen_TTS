@@ -666,7 +666,7 @@ mod tests {
     }
     fn app() -> Router {
         dashboard_router(DashboardApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             store: Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store"))),
             authorizer: Arc::new(Auth),
             options: Arc::new(Options),
@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(saved.status(), StatusCode::OK);
         assert_eq!(
             saved.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static("https://vozen.org"))
+            Some(&HeaderValue::from_static("https://bot.example.com"))
         );
     }
 
