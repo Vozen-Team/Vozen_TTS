@@ -7,6 +7,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import hashes
@@ -21,6 +22,28 @@ def encoded(value):
     if isinstance(value, dict):
         value = json.dumps(value).encode()
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+class CapacityTests(unittest.TestCase):
+    def check(self, separate, root_free, image_free):
+        def filesystem(path, **kwargs):
+            return SimpleNamespace(st_dev=1 if path == broker.STATE or not separate else 2)
+        def free(path):
+            return SimpleNamespace(free=root_free if path == broker.STATE else image_free)
+        with patch.object(pathlib.Path, "stat", autospec=True, side_effect=filesystem), patch.object(broker.shutil, "disk_usage", side_effect=free):
+            broker.require_disk_headroom()
+
+    def test_shared_filesystem_reserves_archive_content_and_snapshots_together(self):
+        self.check(False, 20 * 1024**3, 20 * 1024**3)
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(False, 12 * 1024**3, 12 * 1024**3)
+
+    def test_separate_filesystems_keep_their_own_reservations(self):
+        self.check(True, 4 * 1024**3, 20 * 1024**3)
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(True, 2 * 1024**3, 20 * 1024**3)
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(True, 4 * 1024**3, 16 * 1024**3)
 
 
 class TrustTests(unittest.TestCase):

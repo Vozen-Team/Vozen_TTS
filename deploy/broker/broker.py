@@ -29,6 +29,7 @@ OWNER_ID = "343175426"
 ISSUER = "https://token.actions.githubusercontent.com"
 LIB = pathlib.Path("/usr/local/lib/vozen-deploy-broker")
 STATE = pathlib.Path("/var/lib/vozen-deploy-broker")
+IMAGE_STORE = pathlib.Path("/var/lib/containerd")
 SECURE = pathlib.Path("/srv/vozen-secure/broker")
 CONTAINER = "vozen-rust-prod-vozen-1"
 UNIT = "vozen-encrypted-runtime.service"
@@ -45,6 +46,18 @@ class Refusal(RuntimeError):
 def require(condition, message):
     if not condition:
         raise Refusal(message)
+
+
+def require_disk_headroom():
+    # This VPS uses the containerd image store: reserve both content and unpacked snapshots.
+    budgets = {}
+    for path, size in ((STATE, MAX_ARCHIVE), (IMAGE_STORE, 2 * 8 * 1024**3)):
+        device = path.stat().st_dev
+        anchor, previous = budgets.get(device, (path, 0))
+        budgets[device] = (anchor, previous + size)
+    for path, size in budgets.values():
+        require(shutil.disk_usage(path).free > size + 1024**3,
+                "insufficient deployment disk headroom")
 
 
 def strict_json(raw):
@@ -416,8 +429,7 @@ def deploy(request):
             cleanup_after_verified_deploy(state["image"], state.get("rollback"))
             print("Vozen revision already deployed and verified; no replacement.", flush=True)
             return
-        require(shutil.disk_usage(STATE).free > MAX_ARCHIVE + 8 * 1024**3 + 1024**3,
-                "insufficient deployment disk headroom")
+        require_disk_headroom()
         staging = pathlib.Path(tempfile.mkdtemp(prefix="stage-", dir=STATE))
         archive = staging / "image.tar.gz"
         try:
