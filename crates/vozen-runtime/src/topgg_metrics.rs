@@ -162,7 +162,7 @@ mod tests {
         }
     }
 
-    const BOT: &str = "1523826014935842997";
+    const BOT: &str = "100000000000000004";
 
     #[tokio::test]
     async fn v1_success_uses_bearer_auth_without_a_fallback() {

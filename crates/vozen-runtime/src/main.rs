@@ -3014,7 +3014,7 @@ mod tests {
         let config = PremiumHttpConfig {
             browser_api_enabled: true,
             client_id: Some("client".into()),
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             kofi_webhook_token: None,
             kofi_shop_map: None,
             claim_help_webhook_url: None,
@@ -3644,7 +3644,7 @@ mod tests {
             Some(PremiumHttpConfig {
                 browser_api_enabled: false,
                 client_id: None,
-                origin: "https://vozen.org".into(),
+                origin: "https://bot.example.com".into(),
                 kofi_webhook_token: Some("token".into()),
                 kofi_shop_map: None,
                 claim_help_webhook_url: None,
