@@ -1,5 +1,7 @@
 # Plano: conformidade com os Termos/Política de Desenvolvedor do Discord
 
+> Portal configuration examples use fictional URLs and an application-ID placeholder; replace them with your own public policy pages and app ID.
+
 > Fontes auditadas (2026-07-11): Termos de Serviço de Desenvolvedor (efetivos 2024-07-08),
 > Política de Desenvolvedor (efetiva 2024-07-08), Termos do SDK Social (2025-03-17).
 > O SDK Social **não se aplica** ao Vozen (é para integrações sociais dentro de jogos);
@@ -43,8 +45,8 @@ As 6 lacunas identificadas (fases abaixo) + regra permanente no CONTRIBUTING.md.
 
 ### Fase 1 — Ações manuais no Discord Developer Portal (Diogo, 10 min)
 Deliverable: portal em ordem; screenshot/confirmação.
-- [ ] Preencher **Privacy Policy URL** = `https://vozen.org/privacy` e **Terms of Service URL**
-      = `https://vozen.org/terms` na app `1523826014935842997` (General Information).
+- [ ] Preencher **Privacy Policy URL** = `https://bot.example.com/privacy` e **Terms of Service URL**
+      = `https://bot.example.com/terms` na app `<DISCORD_APPLICATION_ID>` (General Information).
       Obrigatório por §5(a) ("links públicos e atualizados no Portal do Desenvolvedor").
 - [ ] Confirmar que a **descrição da app** no portal descreve fielmente a funcionalidade (§1(b)).
 - [ ] Ver o separador **Monetization**: a app é elegível para Premium Apps? (requer app

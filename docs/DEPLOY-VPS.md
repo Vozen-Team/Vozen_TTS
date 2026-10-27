@@ -1,11 +1,13 @@
 # Deploy do bot num VPS 24/7 + API do Premium em HTTPS
 
+> Historical guide: configuration examples use fictional domains and IDs. Replace them with your own values; this is not the current production configuration.
+
 Guia passo-a-passo para pôr o Vozen a correr sempre ligado num VPS Linux, e
 expor a API do painel Premium (`GET /api/me/premium`) em HTTPS — a peça que
 falta para o login com Discord no site (`account.html`) funcionar a sério.
 
 Sem isto o site fica no estado "em breve" (painel dormente). Depois deste
-guia: `PREMIUM_API_ENABLED=true` + domínio `api.vozen.org` + login OAuth
+guia: `PREMIUM_API_ENABLED=true` + domínio `api.example.com` + login OAuth
 real.
 
 ## 0. Escolha do VPS
@@ -26,15 +28,15 @@ seguintes.
 
 ## 1. Apontar o subdomínio da API
 
-Na Namecheap (Advanced DNS do `vozen.org`, o mesmo sítio dos outros
+Na Namecheap (Advanced DNS do `bot.example.com`, o mesmo sítio dos outros
 registos), adiciona:
 
 | Type | Host | Value | TTL |
 |---|---|---|---|
 | A Record | `api` | `<IP do VPS>` | Automatic |
 
-Isto faz `api.vozen.org` apontar para o VPS. Confirma com
-`nslookup api.vozen.org` ao fim de uns minutos.
+Isto faz `api.example.com` apontar para o VPS. Confirma com
+`nslookup api.example.com` ao fim de uns minutos.
 
 ## 2. Primeiro acesso e atualização do sistema
 
@@ -89,7 +91,7 @@ Preenche (**nunca commitar este ficheiro**):
 
 ```dotenv
 DISCORD_TOKEN=<o token do bot>
-CLIENT_ID=1523826014935842997
+CLIENT_ID=<DISCORD_APPLICATION_ID>
 
 # Motor TTS — piper é grátis/self-hosted, é o default se deixares em branco
 TTS_ENGINE=piper
@@ -102,7 +104,7 @@ KOFI_WEBHOOK_PORT=3001
 
 # Painel Premium — ATIVA aqui
 PREMIUM_API_ENABLED=true
-PREMIUM_API_ORIGIN=https://vozen.org
+PREMIUM_API_ORIGIN=https://bot.example.com
 
 # Recompensa top.gg (o segredo whs_ vem do dashboard da top.gg)
 TOPGG_WEBHOOK_SECRET=<whs_...>
@@ -116,7 +118,7 @@ DB_BACKUP_RETENTION_DAYS=30
 ```
 
 `PREMIUM_API_ORIGIN` é a única origem que o CORS deixa chamar a API — tem
-de ser exatamente `https://vozen.org` (sem barra final).
+de ser exatamente `https://bot.example.com` (sem barra final).
 
 ## 7. Serviço systemd (mantém o bot ligado 24/7)
 
@@ -168,7 +170,7 @@ O `start:prod` usa o supervisor `scripts/start-prod.mjs` (lock, restart
 automático). O systemd é a segunda camada — reinicia mesmo que o processo
 Node morra por completo ou a máquina reinicie.
 
-## 8. Caddy — HTTPS automático e grátis para `api.vozen.org`
+## 8. Caddy — HTTPS automático e grátis para `api.example.com`
 
 Caddy trata do certificado Let's Encrypt sozinho, sem qualquer configuração
 manual de SSL.
@@ -190,7 +192,7 @@ sudo nano /etc/caddy/Caddyfile
 Substitui tudo por:
 
 ```
-api.vozen.org {
+api.example.com {
     reverse_proxy localhost:3001
 }
 ```
@@ -205,7 +207,7 @@ Caddy vai buscar o certificado automaticamente na primeira ligação
 (precisa do DNS do passo 1 já propagado). Testa:
 
 ```bash
-curl -I https://api.vozen.org/api/me/premium
+curl -I https://api.example.com/api/me/premium
 # esperado: 401 Unauthorized (sem token) — confirma que o HTTPS + proxy funcionam
 ```
 
@@ -224,15 +226,15 @@ sudo ufw status
 
 ## 10. Ligar o site ao backend (eu faço isto)
 
-Três alterações no código, depois de confirmares que `api.vozen.org`
+Três alterações no código, depois de confirmares que `api.example.com`
 responde em HTTPS:
 
-1. `site/js/main-v14.js`: `PREMIUM_API_BASE = "https://api.vozen.org"`
+1. `site/js/main-v14.js`: `PREMIUM_API_BASE = "https://api.example.com"`
 2. Build + commit + push do site (dispara o deploy do GitHub Pages).
 3. **Discord Developer Portal** → a tua app → **OAuth2 → Redirects** →
-   adicionar `https://vozen.org/account.html`.
+   adicionar `https://bot.example.com/account.html`.
 
-Depois disto, `https://vozen.org/account.html` deixa de mostrar "em
+Depois disto, `https://bot.example.com/account.html` deixa de mostrar "em
 breve" e passa a ter o botão real de login com Discord.
 
 ## 11. Deploys seguintes (manual)
@@ -287,13 +289,13 @@ A cópia online inclui alterações committed ainda presentes no WAL e fica em
 ## Checklist rápida
 
 - [ ] VPS criado (Ubuntu 24.04), IP anotado
-- [ ] DNS `api.vozen.org` → IP do VPS
+- [ ] DNS `api.example.com` → IP do VPS
 - [ ] Docker Engine + Compose instalados
 - [ ] Repo em `~/vozen-rust-prod` alinhado com `origin/main`
 - [ ] `.env.rust.prod` preenchido e protegido (`chmod 600`)
 - [ ] `vozen.service` Node parado/desativado
 - [ ] `vozen-prod-vozen-1` a correr e healthy
-- [ ] Caddy a servir `https://api.vozen.org` com certificado válido
+- [ ] Caddy a servir `https://api.example.com` com certificado válido
 - [ ] `ufw` ativo, só 22/80/443 abertas
 - [ ] `PREMIUM_API_BASE` atualizado no site + push
 - [ ] Redirect URI adicionado no Discord Developer Portal
@@ -311,7 +313,7 @@ Setup já aplicado no `vozen-prod`. Se algum dia re-clonares o repo do zero, rep
 de línguas colapsa (só sobram as vozes gTTS sintéticas). Repõe copiando do PC:
 ```bash
 # do PC (tem-nos em C:\Users\diogo\piper_pkg\piper\models — 38 .onnx + 38 .onnx.json, 2.3 GB):
-scp C:/Users/diogo/piper_pkg/piper/models/*.onnx* vozen@91.98.128.192:~/discord-bot-Vozen/models/
+scp C:/Users/diogo/piper_pkg/piper/models/*.onnx* vozen@vps.example.com:~/discord-bot-Vozen/models/
 ```
 Binário piper **Linux** (o `.exe` do PC não serve) + `PIPER_PATH` no `.env`:
 ```bash

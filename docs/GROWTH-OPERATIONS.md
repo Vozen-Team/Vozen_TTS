@@ -1,5 +1,7 @@
 # Growth operations runbook
 
+> Installation endpoint examples use api.example.com. Replace it with your configured API host; examples do not change runtime defaults or production configuration.
+
 This runbook turns on the growth features only after each external dependency is
 ready. Do not copy any secret into the public site, the static panel or a Git
 repository.
@@ -39,16 +41,17 @@ daily series idempotently so the visible 30-day history does not restart at zero
 
 ## 3. TTS server-side installation
 
-In the Discord Developer Portal, register exactly:
+In the Discord Developer Portal, register your configured callback URL, for example:
 
 ```
-https://api.vozen.org/api/install/tts/callback
+https://api.example.com/api/install/tts/callback
 ```
 
 Then provision only on the server:
 
 ```
 RUST_TTS_INSTALL_OAUTH_ENABLED=true
+TTS_INSTALL_OAUTH_REDIRECT_URI=https://api.example.com/api/install/tts/callback
 TTS_INSTALL_OAUTH_CLIENT_SECRET=<Discord OAuth client secret>
 TTS_INSTALL_OAUTH_STATE_SECRET=<random value of at least 32 characters>
 ```
@@ -63,7 +66,7 @@ Only after that can the website deploy set
 `window.VOZEN_INSTALL.ttsStartEndpoint` to:
 
 ```
-https://api.vozen.org/api/install/tts/start
+https://api.example.com/api/install/tts/start
 ```
 
 Leaving it empty is intentional: all existing CTAs then keep using the

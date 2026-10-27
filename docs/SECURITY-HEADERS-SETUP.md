@@ -1,4 +1,6 @@
-# Cabeçalhos de segurança do vozen.org (securityheaders.com F → A/A+)
+# Cabeçalhos de segurança do bot.example.com (securityheaders.com F → A/A+)
+
+> Historical guide: configuration examples use fictional domains and a documentation IP. Replace them before use; the dated audit below remains a historical record.
 
 **Estado:** F em `securityheaders.com` porque o site é servido pelo **GitHub Pages**, que
 **não permite cabeçalhos HTTP personalizados** (e ignora ficheiros `_headers`). A meta-tag
@@ -8,12 +10,12 @@ CSP no HTML **não conta** para a nota (o scanner só lê cabeçalhos de respost
 os cabeçalhos com uma **Transform Rule**. ~30 min, grátis, mantém o hosting no GitHub Pages.
 Único passo que exige o dono do domínio: **mudar os nameservers no registrar**.
 
-Este documento é o runbook completo. Os valores dos cabeçalhos já foram **verificados**
-contra os recursos reais do site (ver "Porque estes valores" no fim).
+The configuration values below are examples. Replace the fictional domains before use;
+the dated audit at the end records historical resources, not the current deployment.
 
 ---
 
-## Os 6 cabeçalhos (valores finais, copy-paste)
+## Os 6 cabecalhos (exemplos; substituir os dominios)
 
 | Cabeçalho | Valor |
 | --- | --- |
@@ -27,7 +29,7 @@ contra os recursos reais do site (ver "Porque estes valores" no fim).
 **CSP (uma linha):**
 
 ```
-default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://cdn.discordapp.com https://*.stripe.com; connect-src 'self' https://api.vozen.org https://api.stripe.com https://checkout.stripe.com https://r.stripe.com; frame-src https://checkout.stripe.com; media-src 'self'; form-action 'self'; frame-ancestors 'none'
+default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://cdn.discordapp.com https://*.stripe.com; connect-src 'self' https://api.example.com https://api.stripe.com https://checkout.stripe.com https://r.stripe.com; frame-src https://checkout.stripe.com; media-src 'self'; form-action 'self'; frame-ancestors 'none'
 ```
 
 > É o CSP que já está na meta-tag **+ `frame-ancestors 'none'`** (a meta-tag não consegue
@@ -38,7 +40,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
 ## Rota A — Cloudflare em frente do GitHub Pages
 
 ### Passo 1 — Adicionar o domínio à Cloudflare
-1. Criar conta grátis em cloudflare.com → **Add a site** → `vozen.org` → plano **Free**.
+1. Criar conta grátis em cloudflare.com → **Add a site** → `bot.example.com` → plano **Free**.
 2. A Cloudflare faz scan do DNS atual. Confirmar que ficam os registos do GitHub Pages,
    **todos com o proxy LIGADO (nuvem laranja)**:
    - `A  @  185.199.108.153`
@@ -47,7 +49,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
    - `A  @  185.199.111.153`
    - `CNAME  www  <user>.github.io` (o `<user>` é o dono do repo `discord-bot-Vozen`)
 3. A Cloudflare mostra **2 nameservers** (ex.: `xxx.ns.cloudflare.com`). **← ação do dono:**
-   ir ao **registrar** do vozen.org e substituir os nameservers pelos da Cloudflare.
+   ir ao **registrar** do bot.example.com e substituir os nameservers pelos da Cloudflare.
 4. Esperar a propagação (a Cloudflare avisa por email; costuma ser minutos a poucas horas).
 
 ### Passo 2 — HTTPS
@@ -59,7 +61,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
 ### Passo 3 — Injetar os cabeçalhos (Transform Rule)
 Cloudflare → **Rules → Transform Rules → Modify Response Header → Create rule**:
 - **Nome:** `Vozen security headers`
-- **If:** `Hostname` `equals` `vozen.org` (ou "All incoming requests")
+- **If:** `Hostname` `equals` `bot.example.com` (ou "All incoming requests")
 - **Then → Set static** (um por cabeçalho, botão *+ Set new header* para cada):
   os 6 da tabela acima (nome + valor).
 - **Deploy.**
@@ -71,17 +73,17 @@ Cloudflare → **Rules → Transform Rules → Modify Response Header → Create
 ### Passo 4 — Verificar (loop até A)
 ```bash
 # 1) Os 6 cabeçalhos saem mesmo?
-curl -sI https://vozen.org | grep -iE "strict-transport|content-security|x-frame|x-content|referrer|permissions"
+curl -sI https://bot.example.com | grep -iE "strict-transport|content-security|x-frame|x-content|referrer|permissions"
 
 # 2) E na página do painel?
-curl -sI https://vozen.org/account.html | grep -iE "content-security|x-frame"
+curl -sI https://bot.example.com/account.html | grep -iE "content-security|x-frame"
 ```
-Depois: `securityheaders.com` → scan a `vozen.org`. Se **< A**, ler que cabeçalho falha/está
+Depois: `securityheaders.com` → scan a `bot.example.com`. Se **< A**, ler que cabeçalho falha/está
 mal formado, corrigir a Transform Rule, re-scan. Repetir até **A/A+**.
 
-**Teste funcional do CSP (importante):** abrir `https://vozen.org/account.html` no browser,
+**Teste funcional do CSP (importante):** abrir `https://bot.example.com/account.html` no browser,
 consola aberta. O CSP real é mais estrito que a meta — validar que **não há violações de CSP**
-e que o login Discord (redirect para `discord.com`) e o `GET api.vozen.org/api/me/premium`
+e que o login Discord (redirect para `discord.com`) e o `GET api.example.com/api/me/premium`
 funcionam. Se aparecer violação, ajustar `connect-src`/`img-src`/etc. na regra.
 
 ### Passo 5 — Limpeza no repo (SÓ depois do header estar vivo e validado)
@@ -114,8 +116,8 @@ mais restritivo) — funciona, mas é confuso. Depois de confirmar A/A+ **e** o 
 
 ## Rotas alternativas (se NÃO quiseres Cloudflare-proxy)
 - **B — VPS Hetzner + Caddy:** servir o site do VPS (onde já corre o bot) com um bloco `header`
-  no Caddyfile + `file_server`, `vozen.org { ... }`, auto-HTTPS. Mudar o `pages.yml` para
-  fazer rsync do `site-dist/` para o VPS e apontar o DNS `vozen.org → 91.98.128.192`. Controlo
+  no Caddyfile + `file_server`, `bot.example.com { ... }`, auto-HTTPS. Mudar o `pages.yml` para
+  fazer rsync do `site-dist/` para o VPS e apontar o DNS `bot.example.com → 203.0.113.10`. Controlo
   total, sem 3.º, mas o site sai do GitHub Pages e o VPS passa a ser SPOF do site.
 - **C — Cloudflare Pages:** migrar o hosting do GitHub Pages para Cloudflare Pages (liga ao repo,
   faz build) — aí os cabeçalhos vivem num ficheiro `_headers` **versionado no repo**. Deploy
