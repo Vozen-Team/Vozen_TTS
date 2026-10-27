@@ -1,20 +1,22 @@
 # 037 — Vozen Painel (no site do Vozen Helper)
 
+> Historical plan: domains and owner identifiers below are examples, not active production settings.
+
 > Planeado 2026-07-17, revisto após correção do Diogo: a consola NÃO vai para
-> vozen.org — vai para o site do painel do Helper. Estado: **AGUARDA APROVAÇÃO — não
+> bot.example.com — vai para o site do painel do Helper. Estado: **AGUARDA APROVAÇÃO — não
 > executar sem "executa".**
 
 ## Objetivo
 
-No site do painel que já existe (`https://rexy40407.github.io/vozen-helper-bot/`), criar um
+No site do painel que já existe (`https://admin.example.com/`), criar um
 **Vozen Painel** ao lado do Vozen Helper Painel — com navegação por dois botões no topo —
 onde o dono (username+password + OAuth Discord restrito ao `OWNER_ID`) dá/revoga passes
 Premium/Plus e vê os servidores do Vozen (nome, ícone, mensagens lidas, top speakers).
 Inclui o diagnóstico do `/vozengrant` "não está on" e a verificação do funil de vendas.
 
 **Arquitetura em uma linha:** UI no repo `vozen-helper-bot` (Pages, público) → chama a API
-do bot Vozen (`api.vozen.org`, VPS) → que passa a aceitar o origin
-`https://rexy40407.github.io` nos endpoints `/api/admin/*`.
+do bot Vozen (`api.example.com`, VPS) → que passa a aceitar o origin
+`https://admin.example.com` nos endpoints `/api/admin/*`.
 
 **Assunções explícitas:**
 - O painel do Helper autentica por **OAuth Discord apenas** (confirmado: não há password no
@@ -22,9 +24,9 @@ do bot Vozen (`api.vozen.org`, VPS) → que passa a aceitar o origin
   Painel mantenho o que pediste na mensagem original: **username+password E OAuth** — uma
   camada a mais que o Helper. Se preferires igualar ao Helper (só OAuth), corta-se a F1
   para metade; decide quando aprovares.
-- O ID autorizado (`1523489275155583056`) entra por env var no VPS (`OWNER_ID`, já existe
+- O ID autorizado (`<OWNER_DISCORD_ID>`) entra por env var no VPS (`OWNER_ID`, já existe
   no config do Vozen), nunca hardcoded nos repos públicos.
-- A API do Vozen fica em `api.vozen.org` (URL fixo) — não precisa do mecanismo `api-url.js`
+- A API do Vozen fica em `api.example.com` (URL fixo) — não precisa do mecanismo `api-url.js`
   que o site do Helper usa para o túnel.
 - Aba de servidores usa **apenas dados já recolhidos** (`talk_stats` → `/topspeakers`
   público; `serverStats` agrega) + cache do discord.js (nome/ícone). Zero recolha nova →
@@ -65,7 +67,7 @@ Causa provável já identificada: o comando é **`/vozengrant`** e **sem `OWNER_
 - **Done:** vitest verde; sem envs, nenhum endpoint admin existe.
 
 ### F2 — Endpoints admin no router do Vozen-bot (TDD) [dep: F1]
-- [ ] CORS: adicionar `https://rexy40407.github.io` aos origins aceites **só nas rotas `/api/admin/*`** (o resto mantém vozen.org)
+- [ ] CORS: adicionar `https://admin.example.com` aos origins aceites **só nas rotas `/api/admin/*`** (o resto mantém bot.example.com)
 - [ ] `POST /api/admin/login` — `{user, pass}` + `Authorization: Bearer <token OAuth>`; password ∧ identidade OAuth ∧ `id === config.ownerId` → sessão HMAC; senão 403 indistinto
 - [ ] `GET /api/admin/passes` — ativos + pendentes Ko-fi por reclamar
 - [ ] `POST /api/admin/grant` — `{id, kind: plus|premium, days, seats?}` → `grantUserPremium`/`grantGuildPass` com `source='manual'` (o MESMO caminho do `/vozengrant`)
@@ -98,7 +100,7 @@ Causa provável já identificada: o comando é **`/vozengrant`** e **sem `OWNER_
 ## UI Blueprint (acessório — confinado à F3/F4)
 
 - **Direção:** a linguagem do painel do Helper (dark navy, mono, badges) — o Vozen Painel
-  deve parecer irmão do que já existe nesse site, não um enxerto do vozen.org.
+  deve parecer irmão do que já existe nesse site, não um enxerto do bot.example.com.
 - **Tokens:** extrair do `index.html` do site do helper na F3 (cores/fontes/espaçamentos
   inline); novos: apenas badge de tier (Plus/Premium) e estados de tabela.
 - **Componentes:** SwitcherButtons (header, 2 painéis) → LoginCard (default/erro/loading) →
@@ -119,9 +121,8 @@ Causa provável já identificada: o comando é **`/vozengrant`** e **sem `OWNER_
   para não bloquear a F3 a meio.
 - **Grants = dinheiro** — mitigado por reutilizar o caminho testado do `/vozengrant` +
   auditoria por mutação.
-- **CORS cross-repo:** o origin `https://rexy40407.github.io` cobre TODOS os sites Pages
-  desta conta — aceitável (só tu publicas lá), e limitado às rotas `/api/admin/*`, que sem
-  sessão não devolvem nada.
+- **CORS:** `https://admin.example.com` is a fictional private-panel origin. Configure
+  the exact origin you control; CORS does not replace authentication on `/api/admin/*`.
 - **Consistência de auth:** o Helper é só-OAuth; o Vozen Painel terá user+pass extra (como
   pediste). Se preferires igualar, diz na aprovação — corta metade da F1.
 - **Compliance Discord:** ok porque não há recolha nova (`talk_stats` já existe, já público
