@@ -500,8 +500,8 @@ mod tests {
     use tower::ServiceExt;
     use vozen_store::SqliteStore;
 
-    const OWNER: &str = "1523489275155583056";
-    const CLIENT: &str = "1526211106081734666";
+    const OWNER: &str = "100000000000000001";
+    const CLIENT: &str = "100000000000000003";
     const SECRET: &str = "sess-secret-abcdefghijklmnopqrstuvwxyz";
     const NOW: i64 = 1_700_000_000_000;
 
@@ -551,7 +551,7 @@ mod tests {
             })),
         }));
         admin_router(AdminRouterConfig {
-            origin: "https://panel.vozen.org".into(),
+            origin: "https://admin.example.com".into(),
             api,
             now: Arc::new(|| NOW),
             web_analytics: None,

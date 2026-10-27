@@ -370,7 +370,7 @@ mod tests {
         let store = Arc::new(Mutex::new(
             vozen_store::SqliteStore::open_in_memory().unwrap(),
         ));
-        let guild = "1524199248248176751";
+        let guild = "100000000000000010";
         let before = store.lock().unwrap().guild_config(guild).unwrap();
         let app =
             crate::dashboard_api::dashboard_router(crate::dashboard_api::DashboardApiConfig {
@@ -501,7 +501,7 @@ mod tests {
     #[tokio::test]
     async fn temporary_failure_invalidates_navigation_cache_and_allows_fresh_recovery() {
         let (auth, http) = mutable_authorizer();
-        let guild = "1524199248248176751";
+        let guild = "100000000000000010";
         assert!(matches!(
             auth.manageable_guilds("synthetic").await,
             DashboardAccess::Allowed(_)
@@ -553,7 +553,7 @@ mod tests {
                 json!({"application":{"id":"our-app"},"scopes":["identify","guilds"]}),
             )),
             guilds: Mutex::new(
-                json!([{"id":"1524199248248176751","permissions":"32","owner":false}]),
+                json!([{"id":"100000000000000010","permissions":"32","owner":false}]),
             ),
         });
         let auth = DiscordDashboardAuthorizer::new(
@@ -567,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn guild_access_revalidates_permissions_while_the_list_cache_is_warm() {
         let (auth, http) = mutable_authorizer();
-        let guild = "1524199248248176751";
+        let guild = "100000000000000010";
         assert!(
             matches!(auth.manageable_guilds("synthetic").await,DashboardAccess::Allowed(rows) if rows.len()==1)
         );
@@ -603,7 +603,7 @@ mod tests {
                 DashboardDiscordError::Unavailable => DashboardAccess::Unavailable,
             };
             assert_eq!(
-                auth.authorize_guild("synthetic", "1524199248248176751")
+                auth.authorize_guild("synthetic", "100000000000000010")
                     .await,
                 expected
             );
@@ -638,8 +638,8 @@ mod tests {
         };
         use tower::ServiceExt;
         use vozen_store::{ChannelProfilePatch, SqliteStore};
-        let guild = "1524199248248176751";
-        let channel = "1530367213503250442";
+        let guild = "100000000000000010";
+        let channel = "100000000000000011";
         let (auth, http) = mutable_authorizer();
         assert!(matches!(
             auth.manageable_guilds("synthetic").await,

@@ -172,7 +172,7 @@ mod tests {
     const NOW: i64 = 1_700_000_000_000;
     const SECRET: &str = "a sufficiently-long-webhook-secret";
     const REDEMPTION_SECRET: &str = "0123456789abcdef0123456789abcdef";
-    const BOT: &str = "1523826014935842997";
+    const BOT: &str = "100000000000000004";
     const USER: &str = "12345678901234567";
 
     fn router(store: Arc<Mutex<SqliteStore>>) -> Router {

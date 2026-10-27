@@ -871,8 +871,8 @@ mod tests {
     use async_trait::async_trait;
     use vozen_store::StripeSubscriptionInput;
 
-    const OWNER: &str = "1523489275155583056";
-    const CLIENT: &str = "1526211106081734666";
+    const OWNER: &str = "100000000000000001";
+    const CLIENT: &str = "100000000000000003";
     const SECRET: &str = "sess-secret-abcdefghijklmnopqrstuvwxyz";
     const NOW: i64 = 1_700_000_000_000;
 
