@@ -34,7 +34,7 @@ jobs:
       - run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup component add clippy rustfmt --toolchain 1.97.1
       - run: npm run check:rust-contracts
-      - run: node tools/check-vendored-songbird.mjs
+      - run: node tools/check-vendored-voice.mjs
       - name: Verify scoped Cloudflare API proxy renderer
         run: python3 -m unittest discover -s deploy/cloudflare -p 'test_api_proxy.py' -v
       - run: npm run check:rust-canaries

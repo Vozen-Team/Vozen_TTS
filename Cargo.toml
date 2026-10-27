@@ -9,10 +9,11 @@ members = [
   "crates/vozen-runtime",
 ]
 resolver = "3"
-exclude = ["vendor/songbird"]
+exclude = ["vendor/songbird", "vendor/davey"]
 
 [patch.crates-io]
 songbird = { path = "vendor/songbird" }
+davey = { path = "vendor/davey" }
 
 [workspace.package]
 edition = "2024"
