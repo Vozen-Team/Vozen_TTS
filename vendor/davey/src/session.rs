@@ -2,7 +2,7 @@
 use napi_derive::napi;
 use num_derive::FromPrimitive;
 use openmls::{
-  group::{ProcessMessageError, *},
+  group::*,
   prelude::{hash_ref::ProposalRef, tls_codec::Serialize, *},
   schedule::EpochAuthenticator,
 };
