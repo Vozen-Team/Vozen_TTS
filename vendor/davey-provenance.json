@@ -52,6 +52,21 @@
         "",
         "\n#[cfg(test)]\n#[path = \"../tests/mls_compatibility.rs\"]\nmod compatibility_tests;\n"
       ]
+    ],
+    "src/cryptor/hash_ratchet.rs": [
+      ["use tracing::{debug, trace};", "use tracing::debug;"],
+      [
+        "    trace!(\"Creating hash ratchet with secret: {:x?}\", secret);\n    Self {",
+        "    Self {"
+      ]
+    ],
+    "src/cryptor/mlspp_crypto.rs": [
+      [
+        "  trace!(\"  secret: {:x?}\", secret);\n  hkdf_expand(secret, &info, length)",
+        "  hkdf_expand(secret, &info, length)"
+      ],
+      ["  trace!(\"Input secret {:x?}\", secret);\n  let new_secret", "  let new_secret"],
+      ["  trace!(\"Derived secret {:x?}\", new_secret);\n  Ok(new_secret)", "  Ok(new_secret)"]
     ]
   }
 }

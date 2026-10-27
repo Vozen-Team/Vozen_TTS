@@ -19,7 +19,8 @@ original file hashes. The documented session API adaptation replaces the old
 OpenMLS now authenticates the echoed commit against the pending confirmation tag
 before returning that result; mismatches remain errors. A separate test module
 checks own-commit merge, Welcome, authenticated audio and external-sender rejection;
-the session's trace statement that printed the exported media key seed is removed.
+trace statements that printed media key seeds and derived secrets are removed from
+the session, ratchet and KDF helpers. Cryptographic calculations remain unchanged.
 the three OpenMLS requirements move to OpenMLS 0.9.2 / credentials 0.6.0 /
 RustCrypto provider 0.6.0. Actual Discord interoperability remains unproven.
 Do not deploy this experiment on the strength of a lower advisory count alone.
