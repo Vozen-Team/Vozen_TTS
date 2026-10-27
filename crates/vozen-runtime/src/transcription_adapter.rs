@@ -74,12 +74,18 @@ pub enum FfmpegHealth {
     Unavailable { reason: String },
 }
 
+fn media_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.kill_on_drop(true);
+    command
+}
+
 /// Performs the same early, non-fatal FFmpeg probe as the Node runtime. The caller logs the
 /// result, but a missing binary never prevents the control-plane gateway from starting.
 pub async fn check_ffmpeg(path: &Path) -> FfmpegHealth {
     let result = timeout(
         Duration::from_secs(5),
-        Command::new(path).arg("-version").output(),
+        media_command(path).arg("-version").output(),
     )
     .await;
     match result {
@@ -170,6 +176,25 @@ pub struct WhisperSidecar {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelled_media_process_is_terminated() {
+        let child = media_command(Path::new("/bin/sleep"))
+            .arg("30")
+            .spawn()
+            .expect("synthetic media process");
+        let process = PathBuf::from(format!("/proc/{}", child.id().expect("child pid")));
+        assert!(process.exists());
+        drop(child);
+        for _ in 0..100 {
+            if !process.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("cancelled media process is still alive");
+    }
+
     fn test_directory() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -234,7 +259,7 @@ impl WhisperSidecar {
     }
 
     async fn spawn_locked(&self) -> Result<SidecarState, TranscriptionError> {
-        let mut command = Command::new(&self.options.python);
+        let mut command = media_command(&self.options.python);
         command.arg(&self.options.script);
         if let Some(model) = &self.options.model {
             // Passar também como argumento torna a seleção determinística mesmo
@@ -450,7 +475,7 @@ impl AttachmentTranscriber {
             .map_err(|_| TranscriptionError::Processing)?;
         let status = timeout(
             FFMPEG_TIMEOUT,
-            Command::new(&self.ffmpeg)
+            media_command(&self.ffmpeg)
                 .args([
                     "-hide_banner",
                     "-loglevel",
@@ -528,7 +553,7 @@ impl AttachmentTranscriber {
             .map_err(|_| TranscriptionError::Processing)?;
         let status = timeout(
             FFMPEG_TIMEOUT,
-            Command::new(&self.ffmpeg)
+            media_command(&self.ffmpeg)
                 .args(["-hide_banner", "-loglevel", "error", "-i"])
                 .arg(input)
                 .args([

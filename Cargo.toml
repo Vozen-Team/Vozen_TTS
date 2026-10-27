@@ -9,6 +9,14 @@ members = [
   "crates/vozen-runtime",
 ]
 resolver = "3"
+exclude = ["vendor/songbird", "vendor/davey"]
+
+[patch.crates-io]
+songbird = { path = "vendor/songbird" }
+davey = { path = "vendor/davey" }
+openmls_basic_credential = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
 
 [workspace.package]
 edition = "2024"
@@ -24,18 +32,18 @@ base64 = "0.22.1"
 thiserror = "2"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 axum = "0.8.9"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time", "process", "io-util", "sync", "fs", "net", "signal"] }
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "time", "process", "io-util", "sync", "fs", "net", "signal"] }
 tower = { version = "0.5.3", features = ["util"] }
 uuid = { version = "1.22.0", features = ["v4"] }
 hmac = "0.12.1"
 sha2 = "0.10.9"
 subtle = "2.6.1"
 form_urlencoded = "1.2.2"
-serenity = { version = "0.12.5", default-features = false, features = ["client", "gateway", "model", "rustls_backend"] }
-songbird = { version = "0.6.0", default-features = false, features = ["gateway", "rustls", "serenity"] }
+serenity = { version = "0.12.5", default-features = false, features = ["client", "gateway", "model", "native_tls_backend"] }
+songbird = { version = "0.6.0", default-features = false, features = ["gateway", "native", "serenity"] }
 symphonia = { version = "0.5.5", default-features = false, features = ["pcm", "wav"] }
 async-trait = "0.1.91"
-reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls"] }
 futures = "0.3.33"
 regex = "1.12.3"
 time = { version = "0.3.47", features = ["formatting", "parsing", "macros"] }

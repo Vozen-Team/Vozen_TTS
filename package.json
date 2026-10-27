@@ -22,14 +22,13 @@
     "check:site-copy": "node tools/check-site-copy.mjs",
     "check:site": "vitest run site-tests/operationalHardening.test.mjs site-tests/siteTrust.test.mjs site-tests/siteI18n.test.mjs site-tests/dashboardCoreSettings.test.mjs site-tests/siteUxPolish.test.mjs site-tests/fullAuditRegression.test.mjs && npm run check:i18n && npm run check:site-copy && npm run build:site"
   },
-  "dependencies": {},
   "devDependencies": {
     "clean-css": "^5.3.3",
     "html-minifier-terser": "^7.2.0",
     "parse5": "^8.0.1",
     "prettier": "^3.9.4",
     "terser": "^5.48.0",
-    "vitest": "^3.0.5"
+    "vitest": "^5.0.5"
   },
   "//scripts-policy": "Static-site tooling is installed with npm ci --ignore-scripts; no native Discord bot dependencies are part of this Rust runtime repository."
 }

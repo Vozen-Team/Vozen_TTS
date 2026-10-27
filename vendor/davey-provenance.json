@@ -1,0 +1,92 @@
+{
+  "crate": "davey",
+  "version": "0.1.4",
+  "source": "https://crates.io/api/v1/crates/davey/0.1.4/download",
+  "manifestChanges": [
+    ["[dependencies.openmls]\nversion = \"0.8.1\"", "[dependencies.openmls]\nversion = \"0.9.2\""],
+    [
+      "[dependencies.openmls_basic_credential]\nversion = \"0.5.0\"",
+      "[dependencies.openmls_basic_credential]\nversion = \"0.6.0\""
+    ],
+    [
+      "[dependencies.openmls_rust_crypto]\nversion = \"0.5.1\"",
+      "[dependencies.openmls_rust_crypto]\nversion = \"0.6.0\""
+    ],
+    ["[dependencies.p256]\nversion = \"0.13\"", "[dependencies.p256]\nversion = \"0.14\""],
+    ["[dependencies.rand]\nversion = \"0.8\"\n\n[dependencies.scrypt]", "[dependencies.scrypt]"],
+    [
+      "",
+      "\n[patch.crates-io]\nopenmls_basic_credential = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\nopenmls_rust_crypto = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\nopenmls_traits = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\n"
+    ]
+  ],
+  "originalFiles": {
+    ".cargo_vcs_info.json": "e11ecbb62fe39c7c6c3ca2493ababb8f1b2ca5ebc938e7aa8a36807cf16bd5c6",
+    "Cargo.toml": "352a77a9d08f01dcdce3c146ef22f5c2e41b22783132abf579064dab16cdae58",
+    "Cargo.toml.orig": "6e61ee023b6ab1b6591c358ed51e444d1abfcec312cd56bbb13fb760d733a9a5",
+    "README.md": "aaac02eb277e213b38f622a90f08cc6f25574c2bfc161dd3d3f7b142851e260a",
+    "src/aes_gcm.rs": "946f0905519738e20baaa883330682c4014d667f591f1ab469df92b6f5f4db09",
+    "src/displayable_code.rs": "215c686b9ea71741c14a25035150e3178702ae46d5a4ab6218ecdac0f0e64bfa",
+    "src/errors.rs": "c9a6799b34056c97b4969476907fdb8c86f4edf9607819e0cc87e5108d44f474",
+    "src/fingerprint.rs": "b234bc312970c2165fada5b3c6a7a9488da5d974b04ea73f079a922823232ea8",
+    "src/lib.rs": "1fe184e2e22a5ba8b21585df7cc121db2c0391851f29c28ad7b1b1d78935891a",
+    "src/session.rs": "9b5a854c642a58237d1818039d6b9f05e9f8a7d47f782d2937b9d6eea1d9dc8c",
+    "src/signing_key_pair.rs": "189ba07ec37e221ce288c3476eefa73c2f172e6fcb25e6703a70307cd136d23a",
+    "src/cryptor/aead_cipher.rs": "d7d7be0b10e40ec67491a169ded90e24bc6397eb133a321df7c2f38138947181",
+    "src/cryptor/codec_utils.rs": "795a8929c79779d72ce3e8a7dd58a9eb1bd7972cb3337463b960df2f789880a6",
+    "src/cryptor/cryptor_manager.rs": "83b4576b9805d2c882b695845c0ab0a46785c9f2ff1e4c6e175365a500d6ecfd",
+    "src/cryptor/decryptor.rs": "5b2ccee1301b9aa7b09e7c6dff30e362d55e0f60c0943e2ecb677383fefe54d4",
+    "src/cryptor/encryptor.rs": "73516a922a1c78a9dd46bb2a9e2e845bd8e741e732e2365109db8ebe8fe22ed7",
+    "src/cryptor/frame_processors.rs": "b4f1db54b6f8c1f4ed25d61d84f41a5a32c942afff9186df6e1e575fb381f24b",
+    "src/cryptor/hash_ratchet.rs": "0edc3b1d8622cecc66cbb24b25de9058dc1b75348f514f6d5df849e4aa60e749",
+    "src/cryptor/leb128.rs": "5e76d056e35f5989421af0e406602b80797dc5fe7596dd8d23bc7dffc82dfcce",
+    "src/cryptor/mlspp_crypto.rs": "ad747dab62c944e48b52bfa4ecf62dd6f3bec58ea55b7fe3e3f7b6de258c77cb",
+    "src/cryptor/mod.rs": "3de94d82d2d6258b5bf849a21689fe5f32192ae6e1ac2536abfbad8464aa4b17"
+  },
+  "sourceChanges": {
+    "src/session.rs": [
+      ["  group::{ProcessMessageError, *},", "  group::*,"],
+      ["use tracing::{debug, trace, warn};", "use tracing::{debug, warn};"],
+      [
+        "    trace!(\"Got base secret for user {:?}: {:?}\", user_id, base_secret);\n    Ok(HashRatchet::new(base_secret))",
+        "    Ok(HashRatchet::new(base_secret))"
+      ],
+      [
+        "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(ProcessMessageError::InvalidCommit(StageCommitError::OwnCommit)) => {\n        // This is our own commit, lets merge pending instead\n        debug!(\"Found own commit, merging pending commit instead.\");\n        group.merge_pending_commit(&self.provider)?;\n      }\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n",
+        "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        ProcessedMessageContent::OwnPendingCommit => {\n          group.merge_pending_commit(&self.provider)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n"
+      ],
+      [
+        "",
+        "\n#[cfg(test)]\n#[path = \"../tests/mls_compatibility.rs\"]\nmod compatibility_tests;\n"
+      ]
+    ],
+    "src/cryptor/hash_ratchet.rs": [
+      ["use tracing::{debug, trace};", "use tracing::debug;"],
+      [
+        "    trace!(\"Creating hash ratchet with secret: {:x?}\", secret);\n    Self {",
+        "    Self {"
+      ]
+    ],
+    "src/cryptor/mlspp_crypto.rs": [
+      [
+        "  trace!(\"  secret: {:x?}\", secret);\n  hkdf_expand(secret, &info, length)",
+        "  hkdf_expand(secret, &info, length)"
+      ],
+      ["  trace!(\"Input secret {:x?}\", secret);\n  let new_secret", "  let new_secret"],
+      ["  trace!(\"Derived secret {:x?}\", new_secret);\n  Ok(new_secret)", "  Ok(new_secret)"]
+    ],
+    "src/signing_key_pair.rs": [
+      [
+        "use p256::ecdsa::SigningKey;\nuse rand::rngs::OsRng;",
+        "use p256::{ecdsa::SigningKey, elliptic_curve::Generate};"
+      ],
+      [
+        "    let signing_key = SigningKey::random(&mut OsRng);",
+        "    let signing_key = SigningKey::generate();"
+      ],
+      [
+        "        .to_encoded_point(false)\n        .to_bytes()",
+        "        .to_sec1_point(false)\n        .as_bytes()"
+      ]
+    ]
+  }
+}

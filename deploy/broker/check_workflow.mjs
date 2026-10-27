@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-const text = readFileSync(new URL('./deploy-bot.yml', import.meta.url), 'utf8');
+const text = readFileSync(new URL('./deploy-bot.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 assert(text.includes('id-token: write'));
 assert(text.includes("vozen@146.59.147.110 'deploy'"));
 assert(text.includes('StrictHostKeyChecking=yes'));
