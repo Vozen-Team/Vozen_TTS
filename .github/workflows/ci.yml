@@ -37,6 +37,14 @@ jobs:
       - run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup component add clippy rustfmt --toolchain 1.97.1
       - run: npm run check:rust-contracts
+      - run: node tools/check-vendored-voice.mjs
+      - name: Build the unmodified published Davey interoperability peer
+        run: CARGO_TARGET_DIR="$PWD/target" cargo build --manifest-path vendor/davey/tests/legacy-peer/Cargo.toml --locked
+      - name: Verify DAVE MLS compatibility and authenticated audio
+        timeout-minutes: 5
+        env:
+          VOZEN_LEGACY_DAVE_PEER: ${{ github.workspace }}/target/debug/vozen-dave-legacy-peer
+        run: CARGO_TARGET_DIR="$PWD/target" cargo test --manifest-path vendor/davey/Cargo.toml --locked --lib
       - run: npm run check:rust-canaries
       - run: npm run check:rust
       # The portable Rust build deliberately omits Songbird's native Opus driver. Verify the
