@@ -11,7 +11,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 #[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, num::NonZeroU16};
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 use crate::{
   errors::*, generate_key_fingerprint, pairwise_fingerprints_internal,
@@ -788,7 +788,6 @@ impl DaveSession {
       )
       .map_err(UpdateRatchetsError::ExportingSecretFailed)?;
 
-    trace!("Got base secret for user {:?}: {:?}", user_id, base_secret);
     Ok(HashRatchet::new(base_secret))
   }
 

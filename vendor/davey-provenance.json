@@ -39,6 +39,11 @@
   "sourceChanges": {
     "src/session.rs": [
       ["  group::{ProcessMessageError, *},", "  group::*,"],
+      ["use tracing::{debug, trace, warn};", "use tracing::{debug, warn};"],
+      [
+        "    trace!(\"Got base secret for user {:?}: {:?}\", user_id, base_secret);\n    Ok(HashRatchet::new(base_secret))",
+        "    Ok(HashRatchet::new(base_secret))"
+      ],
       [
         "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(ProcessMessageError::InvalidCommit(StageCommitError::OwnCommit)) => {\n        // This is our own commit, lets merge pending instead\n        debug!(\"Found own commit, merging pending commit instead.\");\n        group.merge_pending_commit(&self.provider)?;\n      }\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n",
         "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        ProcessedMessageContent::OwnPendingCommit => {\n          group.merge_pending_commit(&self.provider)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n"
