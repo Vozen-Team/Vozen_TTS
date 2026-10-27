@@ -19,9 +19,11 @@ for (const [crate, version] of [
     let content = Buffer.from(
       readFileSync(new URL(crate + '/' + name, root), 'utf8').replace(/\r\n/g, '\n'),
     );
-    if (name === 'Cargo.toml') {
+    if (name === 'Cargo.toml' || provenance.sourceChanges?.[name]) {
       let text = content.toString();
-      for (const [original, replacement] of changes) {
+      for (const [original, replacement] of name === 'Cargo.toml'
+        ? changes
+        : provenance.sourceChanges[name]) {
         assert.equal(text.split(replacement).length, 2);
         text = text.replace(replacement, original);
       }
@@ -39,5 +41,5 @@ assert.match(
   /name = "ringbuf"\nversion = "0\.5\.3"/,
 );
 console.log(
-  'Vendored voice library implementations match upstream; only documented dependencies differ.',
+  'Vendored voice libraries match upstream except documented dependency and API compatibility changes.',
 );

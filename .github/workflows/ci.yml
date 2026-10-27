@@ -44,6 +44,8 @@ jobs:
       # present, so a control-plane-only green build can never hide a broken voice cutover.
       - run: cmake --version
       - run: npm run check:rust-voice
+      - name: Verify DAVE MLS compatibility and authenticated audio
+        run: CARGO_TARGET_DIR="$PWD/target" cargo test --manifest-path vendor/davey/Cargo.toml --locked --lib
       # The VPS image is optimized; keep the release + Songbird path green in CI as well.
       - run: cargo test --release -p vozen-runtime --features voice-driver
 

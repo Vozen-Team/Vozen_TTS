@@ -621,13 +621,11 @@ impl DaveSession {
         ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
           group.merge_staged_commit(&self.provider, *staged_commit)?;
         }
+        ProcessedMessageContent::OwnPendingCommit => {
+          group.merge_pending_commit(&self.provider)?;
+        }
         _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),
       },
-      Err(ProcessMessageError::InvalidCommit(StageCommitError::OwnCommit)) => {
-        // This is our own commit, lets merge pending instead
-        debug!("Found own commit, merging pending commit instead.");
-        group.merge_pending_commit(&self.provider)?;
-      }
       Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),
     }
 
@@ -909,6 +907,10 @@ impl DaveSession {
     }
   }
 }
+
+#[cfg(test)]
+#[path = "../tests/mls_compatibility.rs"]
+mod compatibility_tests;
 
 impl Debug for DaveSession {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

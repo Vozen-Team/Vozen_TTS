@@ -3,10 +3,7 @@
   "version": "0.1.4",
   "source": "https://crates.io/api/v1/crates/davey/0.1.4/download",
   "manifestChanges": [
-    [
-      "[dependencies.openmls]\nversion = \"0.8.1\"",
-      "[dependencies.openmls]\nversion = \"0.9.2\""
-    ],
+    ["[dependencies.openmls]\nversion = \"0.8.1\"", "[dependencies.openmls]\nversion = \"0.9.2\""],
     [
       "[dependencies.openmls_basic_credential]\nversion = \"0.5.0\"",
       "[dependencies.openmls_basic_credential]\nversion = \"0.6.0\""
@@ -38,5 +35,17 @@
     "src/cryptor/leb128.rs": "5e76d056e35f5989421af0e406602b80797dc5fe7596dd8d23bc7dffc82dfcce",
     "src/cryptor/mlspp_crypto.rs": "ad747dab62c944e48b52bfa4ecf62dd6f3bec58ea55b7fe3e3f7b6de258c77cb",
     "src/cryptor/mod.rs": "3de94d82d2d6258b5bf849a21689fe5f32192ae6e1ac2536abfbad8464aa4b17"
+  },
+  "sourceChanges": {
+    "src/session.rs": [
+      [
+        "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(ProcessMessageError::InvalidCommit(StageCommitError::OwnCommit)) => {\n        // This is our own commit, lets merge pending instead\n        debug!(\"Found own commit, merging pending commit instead.\");\n        group.merge_pending_commit(&self.provider)?;\n      }\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n",
+        "    match group.process_message(&self.provider, protocol_message) {\n      Ok(message) => match message.into_content() {\n        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {\n          group.merge_staged_commit(&self.provider, *staged_commit)?;\n        }\n        ProcessedMessageContent::OwnPendingCommit => {\n          group.merge_pending_commit(&self.provider)?;\n        }\n        _ => return Err(ProcessCommitError::ProcessedMessageNotStagedCommit),\n      },\n      Err(error) => return Err(ProcessCommitError::ProcessingMessageFailed(error)),\n    }\n"
+      ],
+      [
+        "",
+        "\n#[cfg(test)]\n#[path = \"../tests/mls_compatibility.rs\"]\nmod compatibility_tests;\n"
+      ]
+    ]
   }
 }

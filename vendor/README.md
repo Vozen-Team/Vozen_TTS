@@ -14,9 +14,13 @@ compilation and synthetic tests does not replace a production voice canary.
 ## Experimental MLS dependency upgrade
 
 Davey 0.1.4 is also copied from its published package, with the MIT license and
-original file hashes. Its implementation is unchanged in this initial candidate;
+original file hashes. The documented session API adaptation replaces the old
+`StageCommitError::OwnCommit` branch with `ProcessedMessageContent::OwnPendingCommit`.
+OpenMLS now authenticates the echoed commit against the pending confirmation tag
+before returning that result; mismatches remain errors. A separate test module
+checks own-commit merge, Welcome, authenticated audio and external-sender rejection;
 the three OpenMLS requirements move to OpenMLS 0.9.2 / credentials 0.6.0 /
-RustCrypto provider 0.6.0. Compilation and protocol compatibility are unproven.
+RustCrypto provider 0.6.0. Actual Discord interoperability remains unproven.
 Do not deploy this experiment on the strength of a lower advisory count alone.
 The crypto-bigint advisory remains; optional lockfile dependencies can retain
 other matches. Keep this experiment separate from the reviewed ringbuf candidate.
