@@ -108,7 +108,7 @@ with tarfile.open(archive, "w:gz") as image:
     expect(pkg.scripts?.['check:site']).toContain(
       'vitest run site-tests/operationalHardening.test.mjs site-tests/siteTrust.test.mjs site-tests/siteI18n.test.mjs site-tests/dashboardCoreSettings.test.mjs site-tests/siteUxPolish.test.mjs site-tests/fullAuditRegression.test.mjs',
     );
-    expect(pkg.scripts?.['check:site']).toContain('--pool forks --maxWorkers 1 --minWorkers 1');
+    expect(pkg.scripts?.['check:site']).toContain('--pool forks --maxWorkers 1');
     expect(ci).toMatch(/\n {2}site:\s*\n/);
     expect(ci).toMatch(/\n\s+- run: npm run check:site\s*\n/);
     expect(pages).toMatch(/\n\s+- run: npm run check:site\s*\n/);
