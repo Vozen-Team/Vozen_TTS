@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "interop_wire.rs"]
+mod wire;
+
 fn session(user_id: u64) -> DaveSession {
   DaveSession::new(NonZeroU16::new(1).unwrap(), user_id, 999, None).unwrap()
 }
@@ -17,8 +20,8 @@ fn external_sender() -> Vec<u8> {
   .unwrap()
 }
 
-fn add_member(alice: &mut DaveSession, bob: &mut DaveSession) -> (Vec<u8>, Vec<u8>) {
-  let key_package = KeyPackageIn::tls_deserialize_exact_bytes(&bob.create_key_package().unwrap())
+fn add_member(alice: &mut DaveSession, key_package: &[u8]) -> (Vec<u8>, Vec<u8>) {
+  let key_package = KeyPackageIn::tls_deserialize_exact_bytes(key_package)
     .unwrap()
     .validate(alice.provider.crypto(), ProtocolVersion::Mls10)
     .unwrap();
@@ -45,7 +48,7 @@ fn own_commit_welcome_and_encrypted_audio_round_trip() {
   let sender = external_sender();
   alice.set_external_sender(&sender).unwrap();
   bob.set_external_sender(&sender).unwrap();
-  let (commit, welcome) = add_member(&mut alice, &mut bob);
+  let (commit, welcome) = add_member(&mut alice, &bob.create_key_package().unwrap());
 
   let mut invalid_commit = commit.clone();
   *invalid_commit.last_mut().unwrap() ^= 1;
@@ -88,10 +91,57 @@ fn welcome_with_a_different_external_sender_is_rejected() {
   let mut bob = session(222);
   alice.set_external_sender(&external_sender()).unwrap();
   bob.set_external_sender(&external_sender()).unwrap();
-  let (_, welcome) = add_member(&mut alice, &mut bob);
+  let (_, welcome) = add_member(&mut alice, &bob.create_key_package().unwrap());
   assert!(matches!(
     bob.process_welcome(&welcome),
     Err(ProcessWelcomeError::UnexpectedExternalSender)
   ));
   assert!(!bob.is_ready());
+}
+
+#[test]
+fn welcome_and_encrypted_frames_interoperate_with_published_davey() {
+  use std::process::{Child, Command, Stdio};
+
+  struct Peer(Child);
+  impl Drop for Peer {
+    fn drop(&mut self) {
+      if matches!(self.0.try_wait(), Ok(None)) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+      }
+    }
+  }
+
+  let executable = std::env::var("VOZEN_LEGACY_DAVE_PEER")
+    .expect("build the published Davey peer and set VOZEN_LEGACY_DAVE_PEER");
+  let mut peer = Peer(
+    Command::new(executable)
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .spawn()
+      .unwrap(),
+  );
+  let mut input = peer.0.stdout.take().unwrap();
+  let mut output = peer.0.stdin.take().unwrap();
+  let sender = external_sender();
+  let mut alice = session(111);
+  alice.set_external_sender(&sender).unwrap();
+  wire::write_frame(&mut output, &sender);
+  let (commit, welcome) = add_member(&mut alice, &wire::read_frame(&mut input));
+  alice.process_commit(&commit).unwrap();
+  wire::write_frame(&mut output, &welcome);
+  assert_eq!(
+    wire::read_frame(&mut input),
+    alice.get_epoch_authenticator().unwrap().as_slice()
+  );
+  wire::write_frame(&mut output, &alice.encrypt_opus(&wire::FRAME).unwrap());
+  assert_eq!(
+    alice
+      .decrypt(222, MediaType::AUDIO, &wire::read_frame(&mut input))
+      .unwrap(),
+    wire::FRAME
+  );
+  drop(output);
+  assert!(peer.0.wait().unwrap().success());
 }
