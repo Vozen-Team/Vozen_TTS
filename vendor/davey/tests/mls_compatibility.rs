@@ -29,13 +29,12 @@ fn add_member(alice: &mut DaveSession, bob: &mut DaveSession) -> (Vec<u8>, Vec<u
     .add_members(&alice.provider, &alice.signer, &[key_package])
     .unwrap();
   alice.status = SessionStatus::AWAITING_RESPONSE;
+  let openmls::framing::MlsMessageBodyOut::Welcome(welcome) = welcome.body() else {
+    panic!("adding a member did not produce a Welcome");
+  };
   (
     commit.tls_serialize_detached().unwrap(),
-    welcome
-      .into_welcome()
-      .unwrap()
-      .tls_serialize_detached()
-      .unwrap(),
+    welcome.tls_serialize_detached().unwrap(),
   )
 }
 
