@@ -1,4 +1,4 @@
-# Cabeçalhos de segurança do bot.example.com (securityheaders.com F → A/A+)
+# Cabeçalhos de segurança do example.com (securityheaders.com F → A/A+)
 
 > Historical guide: configuration examples use fictional domains and a documentation IP. Replace them before use; the dated audit below remains a historical record.
 
@@ -40,7 +40,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
 ## Rota A — Cloudflare em frente do GitHub Pages
 
 ### Passo 1 — Adicionar o domínio à Cloudflare
-1. Criar conta grátis em cloudflare.com → **Add a site** → `bot.example.com` → plano **Free**.
+1. Criar conta grátis em cloudflare.com → **Add a site** → `example.com` → plano **Free**.
 2. A Cloudflare faz scan do DNS atual. Confirmar que ficam os registos do GitHub Pages,
    **todos com o proxy LIGADO (nuvem laranja)**:
    - `A  @  185.199.108.153`
@@ -49,7 +49,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
    - `A  @  185.199.111.153`
    - `CNAME  www  <user>.github.io` (o `<user>` é o dono do repo `discord-bot-Vozen`)
 3. A Cloudflare mostra **2 nameservers** (ex.: `xxx.ns.cloudflare.com`). **← ação do dono:**
-   ir ao **registrar** do bot.example.com e substituir os nameservers pelos da Cloudflare.
+   ir ao **registrar** do example.com e substituir os nameservers pelos da Cloudflare.
 4. Esperar a propagação (a Cloudflare avisa por email; costuma ser minutos a poucas horas).
 
 ### Passo 2 — HTTPS
@@ -61,7 +61,7 @@ default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https:
 ### Passo 3 — Injetar os cabeçalhos (Transform Rule)
 Cloudflare → **Rules → Transform Rules → Modify Response Header → Create rule**:
 - **Nome:** `Vozen security headers`
-- **If:** `Hostname` `equals` `bot.example.com` (ou "All incoming requests")
+- **If:** `Hostname` `equals` `example.com` (ou "All incoming requests")
 - **Then → Set static** (um por cabeçalho, botão *+ Set new header* para cada):
   os 6 da tabela acima (nome + valor).
 - **Deploy.**
@@ -73,15 +73,15 @@ Cloudflare → **Rules → Transform Rules → Modify Response Header → Create
 ### Passo 4 — Verificar (loop até A)
 ```bash
 # 1) Os 6 cabeçalhos saem mesmo?
-curl -sI https://bot.example.com | grep -iE "strict-transport|content-security|x-frame|x-content|referrer|permissions"
+curl -sI https://example.com | grep -iE "strict-transport|content-security|x-frame|x-content|referrer|permissions"
 
 # 2) E na página do painel?
-curl -sI https://bot.example.com/account.html | grep -iE "content-security|x-frame"
+curl -sI https://example.com/account.html | grep -iE "content-security|x-frame"
 ```
-Depois: `securityheaders.com` → scan a `bot.example.com`. Se **< A**, ler que cabeçalho falha/está
+Depois: `securityheaders.com` → scan a `example.com`. Se **< A**, ler que cabeçalho falha/está
 mal formado, corrigir a Transform Rule, re-scan. Repetir até **A/A+**.
 
-**Teste funcional do CSP (importante):** abrir `https://bot.example.com/account.html` no browser,
+**Teste funcional do CSP (importante):** abrir `https://example.com/account.html` no browser,
 consola aberta. O CSP real é mais estrito que a meta — validar que **não há violações de CSP**
 e que o login Discord (redirect para `discord.com`) e o `GET api.example.com/api/me/premium`
 funcionam. Se aparecer violação, ajustar `connect-src`/`img-src`/etc. na regra.
@@ -116,8 +116,8 @@ mais restritivo) — funciona, mas é confuso. Depois de confirmar A/A+ **e** o 
 
 ## Rotas alternativas (se NÃO quiseres Cloudflare-proxy)
 - **B — VPS Hetzner + Caddy:** servir o site do VPS (onde já corre o bot) com um bloco `header`
-  no Caddyfile + `file_server`, `bot.example.com { ... }`, auto-HTTPS. Mudar o `pages.yml` para
-  fazer rsync do `site-dist/` para o VPS e apontar o DNS `bot.example.com → 203.0.113.10`. Controlo
+  no Caddyfile + `file_server`, `example.com { ... }`, auto-HTTPS. Mudar o `pages.yml` para
+  fazer rsync do `site-dist/` para o VPS e apontar o DNS `example.com → 203.0.113.10`. Controlo
   total, sem 3.º, mas o site sai do GitHub Pages e o VPS passa a ser SPOF do site.
 - **C — Cloudflare Pages:** migrar o hosting do GitHub Pages para Cloudflare Pages (liga ao repo,
   faz build) — aí os cabeçalhos vivem num ficheiro `_headers` **versionado no repo**. Deploy
