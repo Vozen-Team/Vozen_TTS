@@ -72,3 +72,35 @@ cargo test --workspace --locked
 
 The `legacy-typescript` branch is retained as a recovery snapshot; it is not
 part of the production build.
+
+
+## Optional Cloudflare operator-tool configuration
+
+`tools/cf-security-headers.mjs` and, where present, `tools/cf-web-analytics.mjs`
+accept `CF_ZONE_NAME` and `CF_PUBLIC_API_ORIGIN`. Unset or blank values preserve
+existing defaults; setting a zone derives `https://api.<zone>` unless the API
+origin is explicit. Origins must be HTTPS without credentials, paths, queries,
+fragments or wildcards. These operator variables do not change bot OAuth/CORS
+policies or the active VPS environment. Review each tool before running it.
+
+```dotenv
+CF_ZONE_NAME=example.com
+CF_PUBLIC_API_ORIGIN=https://api.example.com
+```
+
+
+## Public website build configuration
+
+`npm run build:site` reads only `VOZEN_PUBLIC_CLIENT_ID` and
+`VOZEN_PUBLIC_API_ORIGIN` for public identity/API overrides. Both are optional;
+blank values preserve the previous defaults. IDs must be valid Discord
+snowflakes; API URLs must be exact HTTPS origins. The build updates API endpoints,
+status URLs, HTML invite fallbacks and CSP references consistently. Other
+environment fields, including tokens, are not embedded. The site identity and API
+must match your backend configuration; this does not relax backend OAuth/CORS
+pins. Public website URLs/branding and provider identities are unchanged.
+
+```dotenv
+VOZEN_PUBLIC_CLIENT_ID=<YOUR_PUBLIC_DISCORD_APPLICATION_ID>
+VOZEN_PUBLIC_API_ORIGIN=https://api.example.com
+```
