@@ -1,0 +1,10 @@
+[package]
+name = "vozen-dave-legacy-peer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+davey = "=0.1.4"

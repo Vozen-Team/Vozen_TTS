@@ -18,6 +18,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY contracts ./contracts
 COPY crates ./crates
+COPY vendor ./vendor
 
 RUN cargo build --locked --release -p vozen-runtime --features voice-driver
 

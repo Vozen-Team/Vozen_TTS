@@ -35,3 +35,6 @@ vozen-store = { path = "../vozen-store" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+ringbuf = "=0.5.3"
