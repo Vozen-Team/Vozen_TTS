@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { minify as minifyHtml } from 'html-minifier-terser';
 import { minify as minifyJs } from 'terser';
 import CleanCSS from 'clean-css';
+import { loadPublicSiteConfig, configurePublicSiteSource } from './site-config.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'site');
@@ -66,6 +67,7 @@ async function walk(dir) {
 }
 
 async function run() {
+  const config = loadPublicSiteConfig(process.env);
   await rm(OUT, { recursive: true, force: true });
   const files = await walk(SRC);
   let minified = 0;
@@ -78,7 +80,7 @@ async function run() {
 
     // Read text files once and validate their encoding before processing.
     if (TEXT_EXT.has(ext)) {
-      const text = await readFile(file, 'utf8');
+      const text = configurePublicSiteSource(await readFile(file, 'utf8'), config);
       assertNoMojibake(rel, text);
 
       if (ext === '.html' && MINIFY_HTML.has(basename(file))) {

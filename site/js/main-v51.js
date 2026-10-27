@@ -875,7 +875,7 @@
       setPanel({
         mode: "ok",
         data: {
-          user: { id: "483291760145882112", username: "Rexy", avatar: null },
+          user: { id: "100000000000000001", username: "Rexy", avatar: null },
           plus: { active: true, expiresAt: "2026-10-19T00:00:00.000Z" },
           pass: {
             active: true,
