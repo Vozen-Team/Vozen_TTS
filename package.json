@@ -10,7 +10,7 @@
   "scripts": {
     "format": "prettier --write .",
     "format:check": "node tools/check-format.mjs",
-    "test": "vitest run site-tests --pool forks --maxWorkers 1 --minWorkers 1",
+    "test": "vitest run site-tests --pool forks --maxWorkers 1",
     "check": "npm run format:check && npm run check:rust-contracts && npm run check:rust-replica-contract && npm run check:rust-canaries && npm run check:rust && npm run check:site",
     "build:site": "node tools/minify-site.mjs",
     "check:rust-contracts": "node tools/check-rust-contracts.mjs",
@@ -22,7 +22,7 @@
     "build:i18n": "node tools/build-i18n.mjs",
     "check:i18n": "node tools/build-i18n.mjs --check",
     "check:site-copy": "node tools/check-site-copy.mjs",
-    "check:site": "vitest run site-tests/operationalHardening.test.mjs site-tests/siteTrust.test.mjs site-tests/siteI18n.test.mjs site-tests/dashboardCoreSettings.test.mjs site-tests/siteUxPolish.test.mjs site-tests/fullAuditRegression.test.mjs --pool forks --maxWorkers 1 --minWorkers 1 && vitest run site-tests/deployRollback.test.mjs --pool forks --maxWorkers 1 --minWorkers 1 && npm run check:i18n && npm run check:site-copy && npm run build:site"
+    "check:site": "vitest run site-tests/operationalHardening.test.mjs site-tests/siteTrust.test.mjs site-tests/siteI18n.test.mjs site-tests/dashboardCoreSettings.test.mjs site-tests/siteUxPolish.test.mjs site-tests/fullAuditRegression.test.mjs --pool forks --maxWorkers 1 && vitest run site-tests/deployRollback.test.mjs --pool forks --maxWorkers 1 && npm run check:i18n && npm run check:site-copy && npm run build:site"
   },
   "dependencies": {},
   "devDependencies": {
@@ -31,7 +31,7 @@
     "parse5": "^8.0.1",
     "prettier": "^3.9.4",
     "terser": "^5.48.0",
-    "vitest": "^3.0.5"
+    "vitest": "^5.0.5"
   },
   "//scripts-policy": "Static-site tooling is installed with npm ci --ignore-scripts; no native Discord bot dependencies are part of this Rust runtime repository."
 }
