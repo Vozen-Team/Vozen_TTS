@@ -58,8 +58,8 @@ fn own_commit_welcome_and_encrypted_audio_round_trip() {
   assert_eq!(alice.status(), SessionStatus::ACTIVE);
   assert_eq!(alice.epoch(), bob.epoch());
   assert_eq!(
-    alice.get_epoch_authenticator(),
-    bob.get_epoch_authenticator()
+    alice.get_epoch_authenticator().unwrap().as_slice(),
+    bob.get_epoch_authenticator().unwrap().as_slice()
   );
 
   let frame = [0xf8, 0x01, 0x02, 0x03, 0x04, 0x05];
