@@ -11,6 +11,12 @@
     [
       "[dependencies.openmls_rust_crypto]\nversion = \"0.5.1\"",
       "[dependencies.openmls_rust_crypto]\nversion = \"0.6.0\""
+    ],
+    ["[dependencies.p256]\nversion = \"0.13\"", "[dependencies.p256]\nversion = \"0.14\""],
+    ["[dependencies.rand]\nversion = \"0.8\"\n\n[dependencies.scrypt]", "[dependencies.scrypt]"],
+    [
+      "",
+      "\n[patch.crates-io]\nopenmls_basic_credential = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\nopenmls_rust_crypto = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\nopenmls_traits = { git = \"https://github.com/openmls/openmls\", rev = \"be248d4b1306d87a641ce24ed0ffcab2b27967f6\" }\n"
     ]
   ],
   "originalFiles": {
@@ -67,6 +73,20 @@
       ],
       ["  trace!(\"Input secret {:x?}\", secret);\n  let new_secret", "  let new_secret"],
       ["  trace!(\"Derived secret {:x?}\", new_secret);\n  Ok(new_secret)", "  Ok(new_secret)"]
+    ],
+    "src/signing_key_pair.rs": [
+      [
+        "use p256::ecdsa::SigningKey;\nuse rand::rngs::OsRng;",
+        "use p256::{ecdsa::SigningKey, elliptic_curve::Generate};"
+      ],
+      [
+        "    let signing_key = SigningKey::random(&mut OsRng);",
+        "    let signing_key = SigningKey::generate();"
+      ],
+      [
+        "        .to_encoded_point(false)\n        .to_bytes()",
+        "        .to_sec1_point(false)\n        .as_bytes()"
+      ]
     ]
   }
 }

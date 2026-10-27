@@ -37,7 +37,7 @@ for (const [crate, version] of [
   }
 }
 assert.match(
-  readFileSync(new URL('../Cargo.lock', import.meta.url), 'utf8'),
+  readFileSync(new URL('../Cargo.lock', import.meta.url), 'utf8').replace(/\r\n/g, '\n'),
   /name = "ringbuf"\nversion = "0\.5\.3"/,
 );
 console.log(

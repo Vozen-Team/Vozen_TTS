@@ -34,3 +34,20 @@ before the Davey tests and sets `VOZEN_LEGACY_DAVE_PEER` to its executable. The
 test exchanges Welcome, epoch authenticator and encrypted synthetic frames between
 the two implementations over bounded local pipes; it uses no Discord credentials.
 The test reaps its child on success or failure, with a five-minute CI step limit.
+
+## Experimental coordinated RustCrypto upgrade
+
+This candidate pins the upstream OpenMLS credentials, crypto provider and traits
+to commit `be248d4b1306d87a641ce24ed0ffcab2b27967f6`. The provider uses published
+HPKE 0.8 / P-256 and P-384 0.14, selecting crypto-bigint 0.7.10. Davey's key-pair
+helper follows P-256 0.14's documented `Generate`/`to_sec1_point` API; its obsolete
+rand 0.8 dependency is removed. No cryptographic primitive is implemented locally.
+The same patches and dependency pins apply to the separate Davey test workspace.
+
+The production lockfile has zero RustSec matches in the recorded audit; the
+standalone Davey lock still includes two optional pyo3 matches, and the isolated
+legacy peer deliberately keeps its original vulnerable dependencies as a test
+control. Neither is the production graph. Scanner results do not establish
+compatibility or security. This upstream revision is not a published OpenMLS
+provider release; retain draft status until Linux CI, cross-version tests,
+independent review and a real Discord voice canary are complete.

@@ -14,6 +14,9 @@ exclude = ["vendor/songbird", "vendor/davey"]
 [patch.crates-io]
 songbird = { path = "vendor/songbird" }
 davey = { path = "vendor/davey" }
+openmls_basic_credential = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "be248d4b1306d87a641ce24ed0ffcab2b27967f6" }
 
 [workspace.package]
 edition = "2024"
