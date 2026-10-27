@@ -1,5 +1,7 @@
 # Plano — Repor vozes/línguas/motores/jogos no VPS
 
+> Historical plan: the scp example uses a fictional VPS hostname; replace it with your own host.
+
 > Contexto: o bot migrou do PC (Windows) para o VPS Hetzner (`vozen@91.98.128.192`,
 > Ubuntu 24.04, repo em `/home/vozen/discord-bot-Vozen`, serviço `vozen.service`).
 > A pasta `models/` é gitignored → o VPS ficou SEM os 38 `.onnx` do Piper, e o
@@ -44,7 +46,7 @@ O PC tem alterações NÃO commitadas (de outro agente): `src/premium/kofiWebhoo
       e o mesmo com `.onnx.json` (o Piper PRECISA do .json ao lado). Escrever um script
       `tools/fetch-piper-models.sh` que recebe a lista e faz wget com retry.
       ⚠️ `pt_PT-tugao-medium` pode não existir no HF (voz custom?) — se falhar o download,
-      copiar do PC via scp: `scp models/pt_PT-tugao-medium.onnx* vozen@91.98.128.192:~/discord-bot-Vozen/models/`.
+      copiar do PC via scp: `scp models/pt_PT-tugao-medium.onnx* vozen@vps.example.com:~/discord-bot-Vozen/models/`.
 - [ ] Instalar o binário piper Linux: release `piper_linux_x86_64.tar.gz` de
       github.com/rhasspy/piper (2023.11.14-2), extrair para `~/piper/`, e no `.env` do
       VPS acrescentar `PIPER_PATH=/home/vozen/piper/piper` (sem imprimir o resto do .env).

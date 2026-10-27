@@ -1,5 +1,7 @@
 # Handoff — Hetzner, Ko-fi, site e correcoes recentes
 
+> Historical handoff: command/configuration examples now use fictional hosts. Replace them before use; the dated observations outside examples are not current production instructions.
+
 Data: 2026-07-09  
 Projeto local: `C:\Users\diogo\Videos\second brain\bots-discord\Vozen-bot`  
 Repo remoto: `https://github.com/Rexy40407/discord-bot-Vozen.git`  
@@ -36,7 +38,7 @@ active
 ```
 
 ```bash
-curl -i https://api.vozen.org/api/me/premium
+curl -i https://api.example.com/api/me/premium
 ```
 
 Resultado esperado sem token Discord:
@@ -79,7 +81,7 @@ Nota: durante a configuracao houve erros com `authorized-keys` vs `authorized_ke
 Teste de SSH a partir da maquina local:
 
 ```powershell
-ssh -o BatchMode=yes -i $env:USERPROFILE\.ssh\id_ed25519 vozen@91.98.128.192 "echo VOZEN_SSH_OK && hostname && pwd"
+ssh -o BatchMode=yes -i $env:USERPROFILE\.ssh\id_ed25519 vozen@vps.example.com "echo VOZEN_SSH_OK && hostname && pwd"
 ```
 
 Resultado esperado:
@@ -110,13 +112,13 @@ PREMIUM_API_ENABLED=SET
 PREMIUM_API_ORIGIN=SET
 ```
 
-Valores nao secretos esperados:
+Exemplos de valores nao secretos (dominio ficticio):
 
 ```env
-KOFI_URL=https://ko-fi.com/rexy00
+KOFI_URL=https://ko-fi.com/YOUR_PAGE
 KOFI_WEBHOOK_PORT=3001
 PREMIUM_API_ENABLED=true
-PREMIUM_API_ORIGIN=https://vozen.org
+PREMIUM_API_ORIGIN=https://bot.example.com
 ```
 
 O `KOFI_WEBHOOK_TOKEN` tambem foi colocado, mas o valor nao deve ser documentado.
@@ -132,16 +134,16 @@ done
 
 ### 3. Ko-fi webhook
 
-No Ko-fi, o campo Webhook URL ficou configurado para:
+Exemplo do campo Webhook URL no Ko-fi (substituir pelo teu dominio):
 
 ```text
-https://api.vozen.org/
+https://api.example.com/
 ```
 
 Fluxo esperado:
 
 1. Comprador compra no Ko-fi.
-2. Ko-fi envia webhook para `https://api.vozen.org/`.
+2. Ko-fi envia webhook para a URL configurada, por exemplo `https://api.example.com/`.
 3. Bot valida `KOFI_WEBHOOK_TOKEN`.
 4. Bot extrai Discord User ID do campo Message.
 5. Se produto contem `Premium`, cria pass de servidor com 3 licencas.
@@ -158,7 +160,7 @@ Descricao recomendada para produto Ko-fi:
 Paste your Discord User ID in the Message field at checkout so Premium can activate automatically.
 
 Get your Discord ID here:
-https://vozen.org/account.html
+https://bot.example.com/account.html
 
 After payment:
 Join the server you want to upgrade and run /premium activate.
@@ -169,7 +171,7 @@ Join the server you want to upgrade and run /premium activate.
 Para atualizar o bot no VPS:
 
 ```bash
-ssh vozen@91.98.128.192
+ssh vozen@vps.example.com
 cd /home/vozen/discord-bot-Vozen
 git pull --ff-only
 npm ci
@@ -458,7 +460,7 @@ systemctl restart vozen.service
 Entrar no VPS:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 vozen@91.98.128.192
+ssh -i ~/.ssh/id_ed25519 vozen@vps.example.com
 ```
 
 Ver estado:
@@ -485,13 +487,13 @@ npm run build
 Confirmar API:
 
 ```bash
-curl -i https://api.vozen.org/api/me/premium
+curl -i https://api.example.com/api/me/premium
 ```
 
 Confirmar site:
 
 ```bash
-curl -L -H 'Cache-Control: no-cache' 'https://vozen.org/account.html?deploy=check'
+curl -L -H 'Cache-Control: no-cache' 'https://bot.example.com/account.html?deploy=check'
 ```
 
 Ver Pages:
