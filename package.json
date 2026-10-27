@@ -29,7 +29,7 @@
     "parse5": "^8.0.1",
     "prettier": "^3.9.4",
     "terser": "^5.48.0",
-    "vitest": "^3.0.5"
+    "vitest": "^4.1.11"
   },
   "//scripts-policy": "Static-site tooling is installed with npm ci --ignore-scripts; no native Discord bot dependencies are part of this Rust runtime repository."
 }
