@@ -29,7 +29,10 @@ OWNER_ID = "343175426"
 ISSUER = "https://token.actions.githubusercontent.com"
 LIB = pathlib.Path("/usr/local/lib/vozen-deploy-broker")
 STATE = pathlib.Path("/var/lib/vozen-deploy-broker")
-IMAGE_STORE = pathlib.Path("/var/lib/containerd")
+PREPARATION = pathlib.Path("/srv/storage-extra/vozen-image-preparation")
+STAGING = PREPARATION / "staging"
+IMAGE_CONTENT = pathlib.Path("/var/lib/containerd/io.containerd.content.v1.content")
+IMAGE_SNAPSHOTS = pathlib.Path("/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs")
 SECURE = pathlib.Path("/srv/vozen-secure/broker")
 CONTAINER = "vozen-rust-prod-vozen-1"
 UNIT = "vozen-encrypted-runtime.service"
@@ -48,15 +51,28 @@ def require(condition, message):
         raise Refusal(message)
 
 
-def require_disk_headroom():
-    # This VPS uses the containerd image store: reserve both content and unpacked snapshots.
+def require_storage_layout():
+    trusted_path(STAGING, directory=True)
+    trusted_path(IMAGE_CONTENT, directory=True)
+    trusted_path(IMAGE_SNAPSHOTS, directory=True)
+    require(os.path.ismount("/srv/storage-extra") and os.path.ismount(IMAGE_CONTENT),
+            "image preparation storage is not mounted")
+    require(STAGING.stat().st_dev == IMAGE_CONTENT.stat().st_dev
+            and STAGING.stat().st_dev != STATE.stat().st_dev
+            and IMAGE_SNAPSHOTS.stat().st_dev == STATE.stat().st_dev,
+            "unexpected image preparation filesystem")
+
+
+def require_disk_headroom(reservations):
+    # Content and snapshots each need a copy; combine budgets only when sharing a device.
     budgets = {}
-    for path, size in ((STATE, MAX_ARCHIVE), (IMAGE_STORE, 2 * 8 * 1024**3)):
+    for path, size in reservations:
+        require(type(size) is int and 0 < size <= 8 * 1024**3, "invalid storage reservation")
         device = path.stat().st_dev
         anchor, previous = budgets.get(device, (path, 0))
         budgets[device] = (anchor, previous + size)
     for path, size in budgets.values():
-        require(shutil.disk_usage(path).free > size + 1024**3,
+        require(shutil.disk_usage(path).free > size + (size + 9) // 10 + 1024**3,
                 "insufficient deployment disk headroom")
 
 
@@ -429,12 +445,14 @@ def deploy(request):
             cleanup_after_verified_deploy(state["image"], state.get("rollback"))
             print("Vozen revision already deployed and verified; no replacement.", flush=True)
             return
-        require_disk_headroom()
-        staging = pathlib.Path(tempfile.mkdtemp(prefix="stage-", dir=STATE))
+        require_storage_layout()
+        require_disk_headroom([(STAGING, MAX_ARCHIVE)])
+        staging = pathlib.Path(tempfile.mkdtemp(prefix="stage-", dir=STAGING))
         archive = staging / "image.tar.gz"
         try:
             copy_artifact(request, archive)
-            load_validator()(archive, request["sha"])
+            expanded = load_validator()(archive, request["sha"])
+            require_disk_headroom([(IMAGE_CONTENT, expanded), (IMAGE_SNAPSHOTS, expanded)])
             docker("load", "--input", str(archive), timeout=900)
             metadata = inspect_image("vozen-rust:" + request["sha"])
             require(metadata.get("Os") == "linux" and metadata.get("Architecture") == "amd64"
