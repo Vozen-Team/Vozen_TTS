@@ -787,7 +787,7 @@ mod tests {
 
     fn app(store: Arc<Mutex<SqliteStore>>) -> Router {
         premium_router(PremiumApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             kofi_webhook_token: Some("kofi-secret".into()),
             store,
             identity_verifier: Arc::new(Identities),
@@ -822,7 +822,7 @@ mod tests {
     fn claim_help_app(notifier: Option<Arc<dyn ClaimHelpNotifier>>) -> Router {
         let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
         premium_router(PremiumApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             kofi_webhook_token: None,
             store,
             identity_verifier: Arc::new(Identities),
@@ -936,7 +936,7 @@ mod tests {
     async fn activation_is_explicitly_unavailable_without_kofi_but_receipt_claims_still_work() {
         let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
         let app = premium_router(PremiumApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             kofi_webhook_token: None,
             store: store.clone(),
             identity_verifier: Arc::new(Identities),
@@ -1004,7 +1004,7 @@ mod tests {
         assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             preflight.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static("https://vozen.org"))
+            Some(&HeaderValue::from_static("https://bot.example.com"))
         );
         let invalid = app
             .oneshot(request(
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             blocked.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static("https://vozen.org"))
+            Some(&HeaderValue::from_static("https://bot.example.com"))
         );
     }
 

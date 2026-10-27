@@ -148,7 +148,7 @@ fn fixture_with_purchases(
     let now = clock.clone();
     let app = stripe_router_with_subscription_lookup(
         StripeApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             purchases_enabled,
             secret_key: "sk_test_fixture".into(),
             publishable_key: "pk_test_fixture".into(),
@@ -224,7 +224,7 @@ async fn paused_purchases_block_before_identity_and_keep_read_only_billing() {
         assert_eq!(response.headers()["cache-control"], "no-store");
         assert_eq!(
             response.headers()["access-control-allow-origin"],
-            "https://vozen.org"
+            "https://bot.example.com"
         );
         let response = app
             .clone()

@@ -83,7 +83,7 @@ fn fixture_with_clock(
     let calls = Arc::new(AtomicUsize::new(0));
     let app = stripe_router_with_subscription_lookup(
         StripeApiConfig {
-            origin: "https://vozen.org".into(),
+            origin: "https://bot.example.com".into(),
             purchases_enabled: false,
             secret_key: "sk_test_fake_not_a_credential".into(),
             publishable_key: "pk_test_fake_not_a_credential".into(),

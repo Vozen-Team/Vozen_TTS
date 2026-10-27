@@ -326,7 +326,7 @@ mod tests {
 
     fn config(state_path: Option<PathBuf>) -> CommandRegistrationConfig {
         CommandRegistrationConfig {
-            application_id: "1523826014935842997".into(),
+            application_id: "100000000000000004".into(),
             public_guild_id: None,
             state_path,
             owner_guild_id: Some("123456789012345678".into()),
