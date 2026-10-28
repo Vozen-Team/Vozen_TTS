@@ -1,8 +1,8 @@
 "use strict";
 
 (function () {
-  const endpoint = "https://api.vozen.org/api/public/status";
-  const healthEndpoint = "https://api.vozen.org/health";
+  const endpoint = "__VOZEN_PUBLIC_API_ORIGIN__/api/public/status";
+  const healthEndpoint = "__VOZEN_PUBLIC_API_ORIGIN__/health";
   const allowed = new Set(["operational", "degraded", "unavailable"]);
   const componentStates = new Set(["operational", "degraded", "unavailable", "unknown"]);
   const labels = {

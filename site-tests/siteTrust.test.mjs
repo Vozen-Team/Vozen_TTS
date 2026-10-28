@@ -1,8 +1,14 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'parse5';
+import { configurePublicSiteSource } from '../tools/site-config.mjs';
 import { describe, expect, it } from 'vitest';
-const source = (path) => readFileSync(resolve(process.cwd(), path), { encoding: 'utf8' });
+const source = (path) => {
+  const text = readFileSync(resolve(process.cwd(), path), { encoding: 'utf8' });
+  return path.startsWith('site/')
+    ? configurePublicSiteSource(text, { clientId: CLIENT_ID, apiOrigin: 'https://api.example.com' })
+    : text;
+};
 const CLIENT_ID = '1523826014935842997';
 const CANONICAL_PERMISSIONS = '326420745232';
 const INVITE_PERMISSIONS = CANONICAL_PERMISSIONS;
@@ -130,7 +136,7 @@ describe('site acquisition and trust contracts', () => {
     const script = source('site/js/status-v1.js');
     expect(page).toContain('Vozen service status');
     expect(page).toContain('js/status-v1.js');
-    expect(script).toContain('https://api.vozen.org/api/public/status');
+    expect(script).toContain('https://api.example.com/api/public/status');
     expect(script).toContain('textContent');
     expect(script).not.toContain('innerHTML');
     expect(script).not.toMatch(/guild|user|message|token|secret/i);
