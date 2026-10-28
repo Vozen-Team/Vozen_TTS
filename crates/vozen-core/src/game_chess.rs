@@ -123,7 +123,9 @@ impl ChessGame {
         let mut setup = self.game.to_setup(EnPassantMode::Legal);
         setup.halfmoves = 0;
         setup.fullmoves = NonZeroU32::MIN;
-        Fen::from_setup(setup).to_string()
+        Fen::try_from_setup(setup)
+            .expect("a legal standard chess position has a representable FEN")
+            .to_string()
     }
 
     /// Applies a move or resignation. The first two distinct users who submit a valid-looking
