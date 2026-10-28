@@ -82,8 +82,13 @@ impl SsrcState {
             let extensions = rtp.get_extension() != 0;
 
             let payload = rtp.payload();
-            let payload_offset = self.crypto_mode.payload_prefix_len();
-            let payload_end_pad = payload.len() - self.crypto_mode.payload_suffix_len();
+            let (payload_offset, payload_end_pad) = if decrypted {
+                (self.crypto_mode.payload_prefix_len(), self.crypto_mode.payload_suffix_len())
+            } else {
+                (0, 0)
+            };
+            let end = payload.len().checked_sub(payload_end_pad).ok_or(Error::IllegalVoicePacket)?;
+            let body = payload.get(payload_offset..end).ok_or(Error::IllegalVoicePacket)?;
 
             // We still need to compute missed packets here in case of long loss chains or similar.
             // This occurs due to the fallback in 'store_packet' (i.e., empty buffer and massive seq difference).
@@ -93,7 +98,7 @@ impl SsrcState {
 
             // TODO: maybe hand over audio and extension indices alongside packet?
             let (audio, _packet_size) = self.scan_and_decode(
-                &payload[payload_offset..payload_end_pad],
+                body,
                 extensions,
                 missed_packets,
                 should_decode && decrypted,
@@ -189,5 +194,38 @@ impl SsrcState {
         };
 
         Ok((pkt, data.len() - start))
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::num::NonZeroU8;
+
+    #[test]
+    fn malformed_decrypted_ranges_are_rejected_and_raw_pass_mode_is_preserved() {
+        for mode in [CryptoMode::Aes256Gcm, CryptoMode::XChaCha20Poly1305] {
+            for size in 0..mode.payload_suffix_len() {
+                for decrypted in [false, true] {
+                    let mut data = vec![0; 12 + size];
+                    data[0] = 0x80; data[1] = 120;
+                    let mut config = Config::default();
+                    config.playout_buffer_length = NonZeroU8::new(1).unwrap();
+                    config.decode_mode = if decrypted { DecodeMode::Decrypt } else { DecodeMode::Pass };
+                    let mut state = SsrcState::new(&RtpPacket::new(&data).unwrap(), mode, &config);
+                    state.store_packet(StoredPacket { packet: Bytes::from(data), decrypted }, &config);
+                    let result = state.get_voice_tick(&config);
+                    if decrypted {
+                        assert!(result.is_err());
+                    } else {
+                        let tick = result.unwrap().unwrap();
+                        assert!(tick.decoded_voice.is_none());
+                        let packet = tick.packet.unwrap();
+                        assert_eq!((packet.payload_offset, packet.payload_end_pad), (0, 0));
+                    }
+                }
+            }
+        }
     }
 }
