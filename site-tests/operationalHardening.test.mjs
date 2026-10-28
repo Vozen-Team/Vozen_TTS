@@ -1,4 +1,9 @@
 import {
+  loadCloudflareSiteConfig,
+  loadPublicSiteConfig,
+  configurePublicSiteSource,
+} from '../tools/site-config.mjs';
+import {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -936,5 +941,111 @@ exit 64`,
     expect(stripe).toContain('fn valid_stripe_session_id');
     expect(stripe).toContain('.header("Stripe-Version", STRIPE_API_VERSION)');
     expect(elements).not.toContain('"return_url"');
+  });
+});
+
+describe('Cloudflare operator configuration', () => {
+  it('preserves the existing defaults for unset or blank variables', () => {
+    expect(loadCloudflareSiteConfig({})).toEqual({
+      zoneName: 'vozen.org',
+      publicApiOrigin: 'https://api.vozen.org',
+    });
+    expect(loadCloudflareSiteConfig({ CF_ZONE_NAME: ' ', CF_PUBLIC_API_ORIGIN: '' })).toEqual(
+      loadCloudflareSiteConfig({}),
+    );
+  });
+
+  it('uses an explicit zone and API origin without broadening the origin', () => {
+    expect(
+      loadCloudflareSiteConfig({
+        CF_ZONE_NAME: ' EXAMPLE.COM ',
+        CF_PUBLIC_API_ORIGIN: 'https://backend.example.com:8443/',
+      }),
+    ).toEqual({
+      zoneName: 'example.com',
+      publicApiOrigin: 'https://backend.example.com:8443',
+    });
+    expect(loadCloudflareSiteConfig({ CF_ZONE_NAME: 'example.com' }).publicApiOrigin).toBe(
+      'https://api.example.com',
+    );
+  });
+
+  it('rejects malformed zone names before an API request can be built', () => {
+    for (const CF_ZONE_NAME of [
+      'https://example.com',
+      '*.example.com',
+      'example.com/path',
+      'example.com?name=other',
+      '127.0.0.1',
+      'localhost',
+      '-bad.example.com',
+    ]) {
+      expect(() => loadCloudflareSiteConfig({ CF_ZONE_NAME })).toThrow('CF_ZONE_NAME');
+    }
+  });
+
+  it('rejects HTTP, credentials, wildcards, paths, queries and fragments in the API origin', () => {
+    for (const CF_PUBLIC_API_ORIGIN of [
+      'http://api.example.com',
+      'https://user:pass@api.example.com',
+      'https://*.example.com',
+      'https://api.example.com/path',
+      'https://api.example.com?next=1',
+      'https://api.example.com/#fragment',
+    ]) {
+      expect(() => loadCloudflareSiteConfig({ CF_PUBLIC_API_ORIGIN })).toThrow(
+        'CF_PUBLIC_API_ORIGIN',
+      );
+    }
+  });
+});
+
+describe('public site build environment', () => {
+  it('leaves source unchanged by default and ignores private environment fields', () => {
+    const source = 'https://api.vozen.org/health client_id=1523826014935842997';
+    const config = loadPublicSiteConfig({ DISCORD_TOKEN: 'DO_NOT_EMBED_PRIVATE_TOKEN' });
+    expect(config).toEqual({ clientId: '1523826014935842997', apiOrigin: 'https://api.vozen.org' });
+    expect(configurePublicSiteSource(source, config)).toBe(source);
+    expect(JSON.stringify(config)).not.toContain('DO_NOT_EMBED_PRIVATE_TOKEN');
+  });
+
+  it('configures JS API endpoints, status URLs, HTML fallbacks and CSP consistently', () => {
+    const config = loadPublicSiteConfig({
+      VOZEN_PUBLIC_CLIENT_ID: '100000000000000001',
+      VOZEN_PUBLIC_API_ORIGIN: 'https://api.example.com/',
+    });
+    const source =
+      'const CLIENT_ID="1523826014935842997"; const API="https://api.vozen.org"; ' +
+      '<a href="https://top.gg/bot/1523826014935842997/vote">Vote</a> ' +
+      'connect-src https://api.vozen.org; https://api.vozen.org/api/public/status';
+    const output = configurePublicSiteSource(source, config);
+    expect(output).not.toContain('1523826014935842997');
+    expect(output).not.toContain('https://api.vozen.org');
+    expect(output).toContain('100000000000000001');
+    expect(output).toContain('https://api.example.com/api/public/status');
+    expect(output).toContain('connect-src https://api.example.com;');
+  });
+
+  it('rejects invalid build IDs and non-origin API URLs before writing output', () => {
+    for (const VOZEN_PUBLIC_CLIENT_ID of [
+      'invalid',
+      '000000000000000000',
+      '99999999999999999999',
+    ]) {
+      expect(() => loadPublicSiteConfig({ VOZEN_PUBLIC_CLIENT_ID })).toThrow(
+        'VOZEN_PUBLIC_CLIENT_ID',
+      );
+    }
+    for (const VOZEN_PUBLIC_API_ORIGIN of [
+      'http://api.example.com',
+      'https://api.example.com/path',
+      'https://user:pass@api.example.com',
+      'https://api.example.com?',
+      'https://api.example.com#',
+    ]) {
+      expect(() => loadPublicSiteConfig({ VOZEN_PUBLIC_API_ORIGIN })).toThrow(
+        'VOZEN_PUBLIC_API_ORIGIN',
+      );
+    }
   });
 });
