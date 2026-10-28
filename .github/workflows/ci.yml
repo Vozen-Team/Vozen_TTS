@@ -68,7 +68,8 @@ jobs:
           set -euo pipefail
           cp Cargo.toml "$RUNNER_TEMP/vozen-test-workspace.toml"
           cp Cargo.lock "$RUNNER_TEMP/vozen-test-workspace.lock"
-          trap 'cp "$RUNNER_TEMP/vozen-test-workspace.toml" Cargo.toml; cp "$RUNNER_TEMP/vozen-test-workspace.lock" Cargo.lock' EXIT
+          cp vendor/songbird/Cargo.toml "$RUNNER_TEMP/vozen-test-songbird.toml"
+          trap 'cp "$RUNNER_TEMP/vozen-test-workspace.toml" Cargo.toml; cp "$RUNNER_TEMP/vozen-test-workspace.lock" Cargo.lock; cp "$RUNNER_TEMP/vozen-test-songbird.toml" vendor/songbird/Cargo.toml' EXIT
           python3 - <<'PYCODE'
           from pathlib import Path
           manifest = Path('Cargo.toml')
@@ -79,6 +80,13 @@ jobs:
           old = 'exclude = ["vendor/songbird", "vendor/davey"]'
           assert text.count(old) == 1
           manifest.write_text(text.replace(old, 'exclude = ["vendor/davey"]'))
+          # Enrolment otherwise resolves unused Rustls backends too; production uses native TLS.
+          # Restrict only this temporary test manifest to the backend exercised below.
+          import re
+          vendor = Path('vendor/songbird/Cargo.toml')
+          text, count = re.subn(r'(?m)^rustls = \[.*?^\]', 'rustls = []', vendor.read_text(), flags=re.S)
+          assert count == 1
+          vendor.write_text(text)
           # The crate archive omits the WAV used by unrelated upstream test helpers.
           # Only our offline security_tests run; this inert fixture permits compiling helpers.
           import wave
