@@ -15,13 +15,15 @@
 //
 // The token is NEVER printed, logged, or saved. Pass it only via the environment.
 
+import { loadCloudflareSiteConfig } from './site-config.mjs';
+
+const { zoneName: ZONE_NAME, publicApiOrigin: PUBLIC_API_ORIGIN } = loadCloudflareSiteConfig(process.env);
 const TOKEN = process.env.CF_API_TOKEN;
 if (!TOKEN) {
   console.error('ERROR: CF_API_TOKEN is missing. See this file header.');
   process.exit(1);
 }
 
-const ZONE_NAME = 'vozen.org';
 const API = 'https://api.cloudflare.com/client/v4';
 const VERIFY_ONLY = process.argv.includes('--verify-only');
 
@@ -33,7 +35,7 @@ const SECURITY_HEADERS = {
     "style-src 'self' 'unsafe-inline'; " +
     "font-src 'self'; " +
     "img-src 'self' data: https://cdn.discordapp.com https://*.stripe.com https://*.link.com; " +
-    "connect-src 'self' https://cloudflareinsights.com https://api.vozen.org https://api.stripe.com https://checkout.stripe.com https://r.stripe.com https://*.stripe.com https://link.com https://*.link.com; " +
+    `connect-src 'self' https://cloudflareinsights.com ${PUBLIC_API_ORIGIN} https://api.stripe.com https://checkout.stripe.com https://r.stripe.com https://*.stripe.com https://link.com https://*.link.com; ` +
     "frame-src https://checkout.stripe.com https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://link.com https://*.link.com; media-src 'self'; " +
     "form-action 'self'; frame-ancestors 'none'",
   'X-Frame-Options': 'DENY',

@@ -15,10 +15,12 @@
 // The public beacon token is domain-bound and intentionally emitted as a
 // GitHub Actions notice after it is found or created. It is not an API secret.
 
+import { loadCloudflareSiteConfig } from './site-config.mjs';
+
 const TOKEN = process.env.CF_API_TOKEN;
 const API = 'https://api.cloudflare.com/client/v4';
 const GRAPHQL_API = `${API}/graphql`;
-const HOST = 'vozen.org';
+const { zoneName: HOST } = loadCloudflareSiteConfig(process.env);
 const APPLY = process.argv.includes('--apply');
 
 if (!TOKEN) {
@@ -102,7 +104,7 @@ async function main() {
   const zoneId = String(zone?.id || '').trim();
   const accountId = String(zone?.account?.id || '').trim();
   if (!zoneId || !accountId) {
-    throw new Error('Cloudflare did not return a usable zone/account association for vozen.org.');
+    throw new Error(`Cloudflare did not return a usable zone/account association for ${HOST}.`);
   }
   console.log(`Cloudflare zone: resolved (${zone.status || 'unknown'}).`);
   console.log('Cloudflare account: resolved.');
@@ -115,7 +117,7 @@ async function main() {
   if (!site) {
     if (!APPLY) {
       console.log('Web Analytics site: absent (verification mode made no changes).');
-      console.log('Rerun this workflow with apply=true to create the manual vozen.org property.');
+      console.log(`Rerun this workflow with apply=true to create the manual ${HOST} property.`);
       return;
     }
     site = await cf(`/accounts/${accountId}/rum/site_info`, {
