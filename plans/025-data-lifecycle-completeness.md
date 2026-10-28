@@ -152,6 +152,5 @@ and reservations include any existing raw row, without a startup data migration.
 existing stable VOTE_REDEMPTION_SECRET and pinned fingerprint are reused, with no new
 schema, dependency or configuration variable. Missing or mismatched keys fail closed.
 The daily cleanup removes HMAC counters after month end; existing legacy raw-row, guild
-and global retention remains unchanged. Counter rows contain no text or audio. Pending
-user-data invalidation, paid grants and the global daily budget remain intact. Mirror
-tombstones still delete raw user/pass rows; no existing database is rewritten by deployment.
+and global retention remains unchanged. Counter rows contain no text or audio. Paid grants
+and the global daily budget remain intact; no existing database is rewritten by deployment.

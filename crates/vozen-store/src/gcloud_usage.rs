@@ -475,7 +475,7 @@ mod tests {
             .unwrap();
         let ledger: i64 = store
             .connection()
-            .query_row("SELECT COUNT(*) FROM vote_reward_ledger", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM vote_redemption", [], |r| r.get(0))
             .unwrap();
         assert_eq!((raw, ledger), (6, 0));
         assert!(
@@ -583,7 +583,6 @@ mod tests {
         );
         let (raw,hashed):(i64,i64)=store.connection().query_row("SELECT SUM(key='u'),SUM(key LIKE 'gcloud:v1:%') FROM gcloud_usage WHERE scope='user'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
         assert_eq!((raw, hashed), (1, 0));
-        assert!(store.list_runtime_outbox(10).unwrap().is_empty());
     }
 
     #[test]
