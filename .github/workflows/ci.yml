@@ -22,6 +22,9 @@ jobs:
       # dependency install scripts, matching the allow-list posture of the main CI job.
       - run: npm rebuild esbuild
       - run: npm run check:site
+        env:
+          VOZEN_PUBLIC_CLIENT_ID: ${{ vars.VOZEN_PUBLIC_CLIENT_ID }}
+          VOZEN_PUBLIC_API_ORIGIN: ${{ vars.VOZEN_PUBLIC_API_ORIGIN }}
 
   # Keep the Rust runtime independently verifiable from the static-site job.
   rust:

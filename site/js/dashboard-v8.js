@@ -9,8 +9,8 @@
    por addEventListener; CSS injetado num <style> (style-src tem 'unsafe-inline'). */
 (function () {
   "use strict";
-  var CLIENT_ID = "1523826014935842997";
-  var API = "https://api.vozen.org";
+  var CLIENT_ID = "__VOZEN_PUBLIC_CLIENT_ID__";
+  var API = "__VOZEN_PUBLIC_API_ORIGIN__";
   var REDIRECT = new URL("/account", location.href).href;
   var TOK_KEY = "vozen.dtoken";
   // The account flow requests `identify email`; the dashboard flow requests `identify guilds`.

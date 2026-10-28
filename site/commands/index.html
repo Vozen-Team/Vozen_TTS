@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self' https://api.vozen.org; form-action 'self'"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self' __VOZEN_PUBLIC_API_ORIGIN__; form-action 'self'"
     />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -121,7 +121,7 @@
                   <li><code>/join</code><span>Join your current voice channel</span></li>
                   <li><code>/tts</code><span>Say something out loud</span></li>
                 </ol>
-                <a class="btn btn--discord-cta btn--sm" href="https://discord.com/oauth2/authorize?client_id=1523826014935842997&amp;permissions=326420745232&amp;scope=bot%20applications.commands" target="_blank" rel="noopener noreferrer">Add Vozen to Discord</a>
+                <a class="btn btn--discord-cta btn--sm" href="https://discord.com/oauth2/authorize?client_id=__VOZEN_PUBLIC_CLIENT_ID__&amp;permissions=326420745232&amp;scope=bot%20applications.commands" target="_blank" rel="noopener noreferrer">Add Vozen to Discord</a>
               </div>
               <div class="commands-aside__block">
                 <p class="command-finder__kicker">Reading the labels</p>

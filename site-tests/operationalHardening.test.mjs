@@ -945,14 +945,13 @@ exit 64`,
 });
 
 describe('Cloudflare operator configuration', () => {
-  it('preserves the existing defaults for unset or blank variables', () => {
-    expect(loadCloudflareSiteConfig({})).toEqual({
-      zoneName: 'vozen.org',
-      publicApiOrigin: 'https://api.vozen.org',
-    });
-    expect(loadCloudflareSiteConfig({ CF_ZONE_NAME: ' ', CF_PUBLIC_API_ORIGIN: '' })).toEqual(
-      loadCloudflareSiteConfig({}),
-    );
+  it('requires both variables without inferring a deployment origin', () => {
+    for (const blank of [undefined, '', ' ']) {
+      expect(() => loadCloudflareSiteConfig({ CF_ZONE_NAME: blank })).toThrow('CF_ZONE_NAME');
+      expect(() =>
+        loadCloudflareSiteConfig({ CF_ZONE_NAME: 'example.com', CF_PUBLIC_API_ORIGIN: blank }),
+      ).toThrow('CF_PUBLIC_API_ORIGIN');
+    }
   });
 
   it('uses an explicit zone and API origin without broadening the origin', () => {
@@ -961,13 +960,7 @@ describe('Cloudflare operator configuration', () => {
         CF_ZONE_NAME: ' EXAMPLE.COM ',
         CF_PUBLIC_API_ORIGIN: 'https://backend.example.com:8443/',
       }),
-    ).toEqual({
-      zoneName: 'example.com',
-      publicApiOrigin: 'https://backend.example.com:8443',
-    });
-    expect(loadCloudflareSiteConfig({ CF_ZONE_NAME: 'example.com' }).publicApiOrigin).toBe(
-      'https://api.example.com',
-    );
+    ).toEqual({ zoneName: 'example.com', publicApiOrigin: 'https://backend.example.com:8443' });
   });
 
   it('rejects malformed zone names before an API request can be built', () => {
@@ -980,7 +973,9 @@ describe('Cloudflare operator configuration', () => {
       'localhost',
       '-bad.example.com',
     ]) {
-      expect(() => loadCloudflareSiteConfig({ CF_ZONE_NAME })).toThrow('CF_ZONE_NAME');
+      expect(() =>
+        loadCloudflareSiteConfig({ CF_ZONE_NAME, CF_PUBLIC_API_ORIGIN: 'https://api.example.com' }),
+      ).toThrow('CF_ZONE_NAME');
     }
   });
 
@@ -993,34 +988,47 @@ describe('Cloudflare operator configuration', () => {
       'https://api.example.com?next=1',
       'https://api.example.com/#fragment',
     ]) {
-      expect(() => loadCloudflareSiteConfig({ CF_PUBLIC_API_ORIGIN })).toThrow(
-        'CF_PUBLIC_API_ORIGIN',
-      );
+      expect(() =>
+        loadCloudflareSiteConfig({ CF_ZONE_NAME: 'example.com', CF_PUBLIC_API_ORIGIN }),
+      ).toThrow('CF_PUBLIC_API_ORIGIN');
     }
   });
 });
 
 describe('public site build environment', () => {
-  it('leaves source unchanged by default and ignores private environment fields', () => {
-    const source = 'https://api.vozen.org/health client_id=1523826014935842997';
-    const config = loadPublicSiteConfig({ DISCORD_TOKEN: 'DO_NOT_EMBED_PRIVATE_TOKEN' });
-    expect(config).toEqual({ clientId: '1523826014935842997', apiOrigin: 'https://api.vozen.org' });
-    expect(configurePublicSiteSource(source, config)).toBe(source);
+  it('requires both public variables and ignores private environment fields', () => {
+    const config = loadPublicSiteConfig({
+      VOZEN_PUBLIC_CLIENT_ID: '100000000000000001',
+      VOZEN_PUBLIC_API_ORIGIN: 'https://api.example.com',
+      DISCORD_TOKEN: 'DO_NOT_EMBED_PRIVATE_TOKEN',
+    });
+    expect(config).toEqual({
+      clientId: '100000000000000001',
+      apiOrigin: 'https://api.example.com',
+    });
     expect(JSON.stringify(config)).not.toContain('DO_NOT_EMBED_PRIVATE_TOKEN');
+    for (const name of ['VOZEN_PUBLIC_CLIENT_ID', 'VOZEN_PUBLIC_API_ORIGIN']) {
+      for (const blank of [undefined, '', ' ']) {
+        expect(() =>
+          loadPublicSiteConfig({
+            VOZEN_PUBLIC_CLIENT_ID: '100000000000000001',
+            VOZEN_PUBLIC_API_ORIGIN: 'https://api.example.com',
+            [name]: blank,
+          }),
+        ).toThrow(name);
+      }
+    }
   });
 
-  it('configures JS API endpoints, status URLs, HTML fallbacks and CSP consistently', () => {
+  it('configures JS endpoints, status URLs, HTML fallbacks and CSP from placeholders', () => {
     const config = loadPublicSiteConfig({
       VOZEN_PUBLIC_CLIENT_ID: '100000000000000001',
       VOZEN_PUBLIC_API_ORIGIN: 'https://api.example.com/',
     });
     const source =
-      'const CLIENT_ID="1523826014935842997"; const API="https://api.vozen.org"; ' +
-      '<a href="https://top.gg/bot/1523826014935842997/vote">Vote</a> ' +
-      'connect-src https://api.vozen.org; https://api.vozen.org/api/public/status';
+      'const CLIENT_ID="__VOZEN_PUBLIC_CLIENT_ID__"; const API="__VOZEN_PUBLIC_API_ORIGIN__"; <a href="https://top.gg/bot/__VOZEN_PUBLIC_CLIENT_ID__/vote">Vote</a> connect-src __VOZEN_PUBLIC_API_ORIGIN__; __VOZEN_PUBLIC_API_ORIGIN__/api/public/status';
     const output = configurePublicSiteSource(source, config);
-    expect(output).not.toContain('1523826014935842997');
-    expect(output).not.toContain('https://api.vozen.org');
+    expect(output).not.toContain('__VOZEN_PUBLIC_');
     expect(output).toContain('100000000000000001');
     expect(output).toContain('https://api.example.com/api/public/status');
     expect(output).toContain('connect-src https://api.example.com;');
@@ -1032,9 +1040,12 @@ describe('public site build environment', () => {
       '000000000000000000',
       '99999999999999999999',
     ]) {
-      expect(() => loadPublicSiteConfig({ VOZEN_PUBLIC_CLIENT_ID })).toThrow(
-        'VOZEN_PUBLIC_CLIENT_ID',
-      );
+      expect(() =>
+        loadPublicSiteConfig({
+          VOZEN_PUBLIC_CLIENT_ID,
+          VOZEN_PUBLIC_API_ORIGIN: 'https://api.example.com',
+        }),
+      ).toThrow('VOZEN_PUBLIC_CLIENT_ID');
     }
     for (const VOZEN_PUBLIC_API_ORIGIN of [
       'http://api.example.com',
@@ -1043,9 +1054,12 @@ describe('public site build environment', () => {
       'https://api.example.com?',
       'https://api.example.com#',
     ]) {
-      expect(() => loadPublicSiteConfig({ VOZEN_PUBLIC_API_ORIGIN })).toThrow(
-        'VOZEN_PUBLIC_API_ORIGIN',
-      );
+      expect(() =>
+        loadPublicSiteConfig({
+          VOZEN_PUBLIC_CLIENT_ID: '100000000000000001',
+          VOZEN_PUBLIC_API_ORIGIN,
+        }),
+      ).toThrow('VOZEN_PUBLIC_API_ORIGIN');
     }
   });
 });
