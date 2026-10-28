@@ -7,13 +7,13 @@
   /* ── config ──────────────────────────────────────────────
      CLIENT_ID é público (está em qualquer link de convite).
      SUPPORT_URL é o convite do servidor de suporte do Vozen. */
-  const CLIENT_ID = "1523826014935842997";
+  const CLIENT_ID = "__VOZEN_PUBLIC_CLIENT_ID__";
   const INVITE_PERMISSIONS = "326420745232"; // Connect+Speak+ViewChannel+SendMessages+ReadMessageHistory+EmbedLinks + threads dos jogos (CreatePublicThreads+SendMessagesInThreads+ManageThreads)
   const SUPPORT_URL = "https://discord.gg/4kYw2WUbNN"; // servidor de suporte do Vozen
   // Painel Premium: base HTTPS da API do bot (GET /api/me/premium). VAZIO => o painel fica
   // escondido (a feature ainda não está no ar). Preenche com o teu host quando tiveres o
   // domínio/túnel + PREMIUM_API_ENABLED=true no bot. Ex.: "https://api.vozen.xyz".
-  const PREMIUM_API_BASE = "https://api.vozen.org";
+  const PREMIUM_API_BASE = "__VOZEN_PUBLIC_API_ORIGIN__";
   const ACTIVATION_TERMS_VERSION = "2026-07-19";
   const ACTIVATION_INTENT_KEY = "vozen.activationIntent";
   const BILLING_INTENT_KEY = "vozen.billingIntent";

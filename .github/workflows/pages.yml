@@ -31,3 +31,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm rebuild esbuild
       - run: npm run check:site
+        env:
+          VOZEN_PUBLIC_CLIENT_ID: ${{ vars.VOZEN_PUBLIC_CLIENT_ID }}
+          VOZEN_PUBLIC_API_ORIGIN: ${{ vars.VOZEN_PUBLIC_API_ORIGIN }}
