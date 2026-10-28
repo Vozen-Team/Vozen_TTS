@@ -39,6 +39,10 @@ jobs:
           node-version: 22
       - run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup component add clippy rustfmt --toolchain 1.97.1
+      - name: Audit locked runtime dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
       - run: npm run check:rust-contracts
       - run: node tools/check-vendored-voice.mjs
       - name: Build the unmodified published Davey interoperability peer
