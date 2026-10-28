@@ -20,5 +20,6 @@ jobs:
       - name: Install distribution cryptography for credential-free tests
         run: sudo apt-get update && sudo apt-get install -y python3-cryptography
       - run: /usr/bin/python3 -m unittest discover -s deploy/broker -p test_broker.py -v
+      - run: /usr/bin/python3 -m unittest discover -s deploy/broker -p test_archive.py -v
       - run: /usr/bin/python3 -m unittest discover -s deploy/broker -p test_image_retention.py -v
       - run: node deploy/broker/check_workflow.mjs

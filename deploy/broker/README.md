@@ -36,6 +36,12 @@ retained previous image. Cutover stops only the encrypted Vozen supervisor and
 recreates only its container. Failure attempts previous-image recovery and
 restores supervision, never restoring an old database over new writes.
 
+Staging, containerd content and overlayfs snapshots stay on the primary
+filesystem. Space checks reserve the archive before copying, then both validated
+content and snapshot allocations, including implicit parent directories, with
+10% margin and 1 GiB spare. The authoritative OCI graph must match the Docker
+image metadata before loading; archive and entry limits remain enforced.
+
 Broker state is root-only and records the accepted CI revision/run/digest. An
 identical verified retry checks health without recreating the container. A
 manual runtime change requires operator reconciliation of state. Broker errors
