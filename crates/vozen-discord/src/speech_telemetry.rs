@@ -209,8 +209,10 @@ struct Pending {
     metrics: MetricPending,
     provider_health: HashMap<String, (OperationalProvider, ProviderHealth, i64)>,
     guild_talk: HashMap<(String, String), i64>,
-    talk_usage: HashMap<(String, String, String, UserEngine), (Arc<AtomicBool>, i64)>,
+    talk_usage: TalkUsagePending,
 }
+
+type TalkUsagePending = HashMap<(String, String, String, UserEngine), (Arc<AtomicBool>, i64)>;
 
 type MetricPending =
     HashMap<(String, String, String), (String, OperationalMetric, OperationalProvider, i64)>;
