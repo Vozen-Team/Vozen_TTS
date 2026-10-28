@@ -79,8 +79,19 @@ jobs:
           old = 'exclude = ["vendor/songbird", "vendor/davey"]'
           assert text.count(old) == 1
           manifest.write_text(text.replace(old, 'exclude = ["vendor/davey"]'))
+          # The crate archive omits the WAV used by unrelated upstream test helpers.
+          # Only our offline security_tests run; this inert fixture permits compiling helpers.
+          import wave
+          fixture = Path('vendor/songbird/resources/loop.wav')
+          assert not fixture.exists()
+          fixture.parent.mkdir(exist_ok=True)
+          with wave.open(str(fixture), 'wb') as pcm:
+              pcm.setnchannels(2)
+              pcm.setsampwidth(2)
+              pcm.setframerate(48000)
+              pcm.writeframes(bytes(1920))
           PYCODE
-          cargo test -p songbird --lib --no-default-features --features driver,receive,native,tungstenite,serenity
+          cargo test -p songbird --lib --no-default-features --features driver,receive,gateway,native,tungstenite,serenity,builtin-queue security_tests
           cargo audit
           python3 - <<'PYCODE'
           import os, tomllib

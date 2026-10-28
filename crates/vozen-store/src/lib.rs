@@ -62,8 +62,8 @@ pub use admin_stats::{
 pub use blocklist::{AddBlockwordResult, MAX_BLOCKWORDS};
 pub use channel_profile::{ChannelProfile, ChannelProfilePatch, MAX_CHANNEL_PROFILES_PER_GUILD};
 pub use data_lifecycle::{
-    GUILD_PURGE_SPECS, GUILD_PURGE_TABLES, PrivacyPurgeKey, PrivacyPurgeSpec, USER_ERASE_SPECS,
-    USER_ERASE_TABLES,
+    GUILD_PURGE_SPECS, GUILD_PURGE_TABLES, PendingUserData, PrivacyPurgeKey, PrivacyPurgeSpec,
+    USER_ERASE_SPECS, USER_ERASE_TABLES,
 };
 pub use gcloud_usage::{GcloudUsageScope, day_key_utc, month_key_utc};
 pub use growth_lifecycle::{GrowthDailyMetric, GrowthOverview};
@@ -218,9 +218,15 @@ pub enum StoreError {
 /// A Rust-owned SQLite connection configured with the same durable schema as the live bot.
 pub struct SqliteStore {
     connection: Connection,
+    pending_user_data: PendingUserData,
 }
 
 impl SqliteStore {
+    /// Shares the validity boundary between erasure and asynchronous personal-data writers.
+    pub fn pending_user_data(&self) -> PendingUserData {
+        self.pending_user_data.clone()
+    }
+
     /// Lists only tables from Vozen's generated schema contract. This is deliberately not a
     /// general SQL interface: callers can safely use the names for a verified migration.
     pub fn durable_table_names(&self) -> Result<Vec<String>, StoreError> {
@@ -367,7 +373,10 @@ impl SqliteStore {
         runtime_outbox::install_runtime_outbox_schema(&transaction)?;
         verify_connection_integrity(&transaction)?;
         transaction.commit()?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            pending_user_data: PendingUserData::default(),
+        })
     }
 
     pub fn has_schema_object(&self, name: &str) -> Result<bool, StoreError> {

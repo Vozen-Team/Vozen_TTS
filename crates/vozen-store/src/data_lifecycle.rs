@@ -8,6 +8,59 @@ use rusqlite::params;
 
 use crate::{SqliteStore, StoreError};
 
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+/// In-memory validity for queued personal data; erasure removes the user's registry entry.
+#[derive(Clone, Default)]
+pub struct PendingUserData {
+    users: Arc<Mutex<HashMap<String, Weak<AtomicBool>>>>,
+}
+
+impl PendingUserData {
+    /// Captures the current generation without locking SQLite or retaining erased identifiers.
+    pub fn capture(&self, user_id: &str) -> Arc<AtomicBool> {
+        let mut users = self
+            .users
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(token) = users.get(user_id).and_then(Weak::upgrade) {
+            return token;
+        }
+        if users.len() == users.capacity() {
+            users.retain(|_, token| token.strong_count() != 0);
+        }
+        let token = Arc::new(AtomicBool::new(true));
+        users.insert(user_id.to_owned(), Arc::downgrade(&token));
+        token
+    }
+
+    /// Releases identifiers whose queued events have all been consumed or discarded.
+    pub fn prune(&self) {
+        self.users
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, token| token.strong_count() != 0);
+    }
+
+    fn invalidate(&self, user_id: &str) {
+        if let Some(token) = self
+            .users
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(user_id)
+            .and_then(|token| token.upgrade())
+        {
+            token.store(false, Ordering::Release);
+        }
+    }
+}
+
 pub const GUILD_PURGE_TABLES: &[&str] = &[
     "user_voice",
     "guild_config",
@@ -194,6 +247,7 @@ impl SqliteStore {
         }
         enqueue_privacy_tombstone(&transaction, "user", user_id)?;
         transaction.commit()?;
+        self.pending_user_data.invalidate(user_id);
         Ok(())
     }
 }
@@ -292,7 +346,9 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'synthetic deletion failure'); END;",
             )
             .expect("failure fixture");
+        let token = store.pending_user_data().capture("user-a");
         assert!(store.erase_user_data("user-a").is_err());
+        assert!(token.load(Ordering::Acquire));
         assert_eq!(
             store.nickname("guild-a", "user-a").expect("nickname"),
             Some("synthetic".into())
