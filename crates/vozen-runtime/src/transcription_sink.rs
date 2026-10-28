@@ -50,7 +50,7 @@ impl TranscriptionGatewaySink {
         user_id: &str,
         guild_id: Option<&str>,
     ) -> Result<AttachmentTranscriptionLimits, GatewayEventDispatchError> {
-        let now = system_now_ms() / 1_000;
+        let now = system_now_ms();
         let store = self.store.lock().map_err(|_| GatewayEventDispatchError)?;
         let user_premium = store
             .is_user_premium(user_id, now)
@@ -194,5 +194,52 @@ impl GatewayEventSink for TranscriptionGatewaySink {
 
     async fn on_guild_delete(&self, _guild_id: &str) -> Result<(), GatewayEventDispatchError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcription_adapter::TranscriptionRuntimeOptions;
+
+    #[test]
+    fn expired_user_and_guild_grants_receive_free_attachment_limits() {
+        let now = system_now_ms();
+        let store = SqliteStore::open_in_memory().expect("store");
+        store
+            .grant_user_premium("expired-user", 1, "manual", now - 86_400_000 - 1_000)
+            .expect("expired user");
+        store
+            .grant_guild_premium("expired-guild", 1, "manual", now - 86_400_000 - 1_000)
+            .expect("expired guild");
+        store
+            .grant_user_premium("active-user", 1, "manual", now)
+            .expect("active user");
+        store
+            .grant_guild_premium("active-guild", 1, "manual", now)
+            .expect("active guild");
+        let transcriber = AttachmentTranscriber::new(TranscriptionRuntimeOptions {
+            python: "unused-python".into(),
+            script: "unused-whisper.py".into(),
+            model: None,
+            ffmpeg: "unused-ffmpeg".into(),
+            max_concurrency: 1,
+        })
+        .expect("credential-free adapter; no process or network operation");
+        let sink = TranscriptionGatewaySink::new(Arc::new(Mutex::new(store)), transcriber);
+        for (user, guild, bytes, seconds) in [
+            ("expired-user", None, FREE_BYTES, FREE_SECONDS),
+            ("free-user", Some("expired-guild"), FREE_BYTES, FREE_SECONDS),
+            ("active-user", None, PREMIUM_BYTES, PREMIUM_SECONDS),
+            (
+                "free-user",
+                Some("active-guild"),
+                PREMIUM_BYTES,
+                PREMIUM_SECONDS,
+            ),
+        ] {
+            let limits = sink.limits(user, guild).expect("limits");
+            assert_eq!((limits.max_bytes, limits.max_seconds), (bytes, seconds));
+        }
     }
 }

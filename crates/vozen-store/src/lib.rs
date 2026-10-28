@@ -135,6 +135,8 @@ pub enum StoreError {
     InvalidBirthday,
     #[error("invalid Google HD usage scope key")]
     InvalidGcloudKey,
+    #[error("Google personal quota requires an initialized stable redemption secret")]
+    GcloudQuotaSecretUnavailable,
     #[error("invalid Google HD usage month")]
     InvalidGcloudMonth,
     #[error("invalid Google HD usage day")]
@@ -182,6 +184,7 @@ pub enum StoreError {
 /// A Rust-owned SQLite connection configured with the same durable schema as the live bot.
 pub struct SqliteStore {
     connection: Connection,
+    gcloud_quota_secret: Option<String>,
 }
 
 impl SqliteStore {
@@ -212,7 +215,10 @@ impl SqliteStore {
         migration::migrate_legacy_schema(&transaction)?;
         verify_connection_integrity(&transaction)?;
         transaction.commit()?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            gcloud_quota_secret: None,
+        })
     }
 
     pub fn has_schema_object(&self, name: &str) -> Result<bool, StoreError> {

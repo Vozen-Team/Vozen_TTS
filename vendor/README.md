@@ -1,8 +1,8 @@
 # Temporary Songbird dependency override
 
-Songbird 0.6.0 is copied from its published crates.io package. Its implementation
-is unchanged; only the ringbuf requirement in the normalized Cargo.toml changes
-from 0.4 to 0.5.3. This selects the upstream repair for RUSTSEC-2026-0293 without
+Songbird 0.6.0 is copied from its published crates.io package. The initial override
+changed only the ringbuf requirement in the normalized Cargo.toml from 0.4 to 0.5.3;
+this candidate additionally carries the separately reviewed source changes below. This selects the upstream repair for RUSTSEC-2026-0293 without
 writing a local unsafe buffer implementation. Original file hashes and the
 upstream revision are retained for review. The upstream ISC license is included.
 
@@ -10,6 +10,23 @@ Remove this override once a compatible Songbird release accepts patched ringbuf.
 Do not edit vendored implementation files without a separate reviewed change.
 The remaining crypto/MLS advisories are not resolved by this override. Passing
 compilation and synthetic tests does not replace a production voice canary.
+
+## Reviewed voice input and lifecycle changes
+
+The additional Songbird patch makes untimed cancellation remove only the relevant
+handler, rejects failed transport authentication before receive-state allocation,
+and bounds payload/padding slices while retaining raw Pass mode. Exact source
+replacements and direct regression tests are recorded in `songbird-provenance.json`.
+`tools/check-vendored-voice.mjs` reconstructs every original upstream file before
+checking its retained hash; implementation changes are not hidden by new hashes.
+
+The additive CI gate temporarily enrolls Songbird for the selected offline
+`security_tests` after the normal workspace gates. A synthetic PCM file permits
+compiling an unrelated upstream helper whose resource is absent from the published
+crate; that helper is not claimed as tested. The original workspace manifest and
+lockfile are restored on exit, and existing locked packages must remain unchanged.
+These tests use no Discord credentials or external media downloads. Full CI and
+production checks remain release requirements.
 
 ## Experimental MLS dependency upgrade
 

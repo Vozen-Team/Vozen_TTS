@@ -186,7 +186,7 @@ impl SqliteStore {
     }
 }
 
-fn assert_stable_redemption_secret(
+pub(crate) fn assert_stable_redemption_secret(
     connection: &Connection,
     redemption_secret: &str,
 ) -> Result<(), StoreError> {
