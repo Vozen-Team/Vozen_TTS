@@ -4,10 +4,11 @@
 //! The adapter supplies the already-detected ISO language only when a user opted into automatic
 //! detection; the default remains a fixed, explicitly selected voice.
 
+use crate::speech_safety::apply_pronunciation_checked;
 use crate::{
     PronunciationEntry, SpeechSegment, SynthRequest, SynthesisEngine, accent_language_of_model,
-    apply_pronunciation, cap_synth_request, expand_abbreviations, pick_voice_for_language,
-    restore_accents, split_english_slang,
+    cap_synth_request, expand_abbreviations, pick_voice_for_language, restore_accents,
+    split_english_slang,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,10 +75,13 @@ pub fn prepare_speech(input: SpeechPreparationInput<'_>) -> PreparedSpeech {
         .map_or(input.default_speed, |voice| voice.speed);
     let preferred = preferred_model(&input);
     let engine = preferred_engine(&input);
+    let pronounced = apply_pronunciation_checked(input.personal, input.pronunciations);
+    let rejected_expansion = pronounced.is_none();
+    let pronounced = pronounced.unwrap_or_default();
 
     let mut prepared = if !input.auto_detect {
         let spoken = restore_accents(
-            &expand_abbreviations(&apply_pronunciation(input.personal, input.pronunciations)),
+            &expand_abbreviations(&pronounced),
             accent_language_of_model(&preferred),
         );
         PreparedSpeech {
@@ -97,8 +101,7 @@ pub fn prepare_speech(input: SpeechPreparationInput<'_>) -> PreparedSpeech {
         }
     } else {
         prepare_detected(
-            input.personal,
-            input.pronunciations,
+            &pronounced,
             input.detected_language,
             input.available_models,
             &preferred,
@@ -107,7 +110,9 @@ pub fn prepare_speech(input: SpeechPreparationInput<'_>) -> PreparedSpeech {
         )
     };
 
-    decorate_announcements(&mut prepared, input.announce_speaker, input.media);
+    if !rejected_expansion {
+        decorate_announcements(&mut prepared, input.announce_speaker, input.media);
+    }
     prepared.request = cap_synth_request(&prepared.request);
     prepared
 }
@@ -142,16 +147,14 @@ fn preferred_engine(input: &SpeechPreparationInput<'_>) -> SynthesisEngine {
 }
 
 fn prepare_detected(
-    personal: &str,
-    pronunciations: &[PronunciationEntry],
+    pronounced: &str,
     detected_language: Option<&str>,
     available_models: &[String],
     preferred: &str,
     speed: f64,
     engine: SynthesisEngine,
 ) -> PreparedSpeech {
-    let pronounced = apply_pronunciation(personal, pronunciations);
-    let raw_segments = split_english_slang(&pronounced);
+    let raw_segments = split_english_slang(pronounced);
     let base_language = detected_language.unwrap_or("");
     let segments: Vec<_> = raw_segments
         .iter()
@@ -495,6 +498,39 @@ mod tests {
             prepared.request.segments.as_ref().expect("mixed")[1].model,
             "en_US-amy-medium"
         );
+    }
+
+    #[test]
+    fn rejected_pronunciation_is_not_revived_by_speaker_or_media_announcements() {
+        let available = models();
+        let dictionary = [PronunciationEntry {
+            term: "a".into(),
+            replacement: "b".repeat(64 * 1024 + 1),
+        }];
+        let media = [MediaAnnouncement {
+            kind: MediaAnnouncementKind::Gif,
+            text: None,
+        }];
+        for auto_detect in [false, true] {
+            let mut excessive = input("a", &available);
+            excessive.pronunciations = &dictionary;
+            excessive.announce_speaker = Some("Alice");
+            excessive.media = &media;
+            excessive.auto_detect = auto_detect;
+            let prepared = prepare_speech(excessive);
+            assert!(prepared.spoken.is_empty());
+            assert!(prepared.request.text.is_empty());
+            assert!(
+                prepared
+                    .request
+                    .emphasis_source
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+            );
+        }
+        let mut media_only = input("", &available);
+        media_only.media = &media;
+        assert!(!prepare_speech(media_only).spoken.is_empty());
     }
 
     #[test]

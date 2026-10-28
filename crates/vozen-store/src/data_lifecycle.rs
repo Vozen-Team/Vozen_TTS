@@ -4,8 +4,6 @@
 //! entitlements and financial/idempotency evidence may carry a Discord identifier but are not
 //! erased by a privacy request. Adding a new user/guild table requires an explicit decision.
 
-use rusqlite::params;
-
 use crate::{SqliteStore, StoreError};
 
 pub const GUILD_PURGE_TABLES: &[&str] = &[
@@ -85,11 +83,10 @@ impl SqliteStore {
             "DELETE FROM kofi_supporter WHERE discord_id = ?1",
             [user_id],
         )?;
-        // gcloud `key` is a user ID for personal/pass usage; guild-level usage has a guild ID and
-        // remains under the departed-guild/retention policy.
-        transaction.execute(
-            "DELETE FROM gcloud_usage WHERE key = ?1 AND scope IN ('user', 'pass')",
-            params![user_id],
+        self.erase_personal_gcloud_on(
+            &transaction,
+            user_id,
+            &crate::month_key_utc(crate::gcloud_usage::current_time_ms()),
         )?;
         transaction.commit()?;
         Ok(())

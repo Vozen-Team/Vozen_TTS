@@ -4,6 +4,12 @@ use crate::{SqliteStore, StoreError};
 
 /// Milliseconds in a billing day. This matches the Node subscription contract exactly.
 pub const DAY_MS: i64 = 86_400_000;
+const RANKED_PASS_ACTIVATIONS: &str = "WITH ranked_pass_activations AS (
+    SELECT user_id, guild_id, activated_at,
+           ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY activated_at, guild_id) AS seat_number
+    FROM premium_pass_activation
+)";
+
 /// The current Top.gg Plus reward duration. It is an existing entitlement source, not a payment.
 pub const VOTE_REWARD_MS: i64 = 48 * 60 * 60 * 1_000;
 
@@ -128,11 +134,11 @@ impl SqliteStore {
             return Ok(true);
         }
         let has_active_pass: bool = self.connection().query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM premium_pass_activation activation
+            &format!("{RANKED_PASS_ACTIVATIONS} SELECT EXISTS(
+                SELECT 1 FROM ranked_pass_activations activation
                 JOIN premium_pass pass ON pass.user_id = activation.user_id
-                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
-             )",
+                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2 AND activation.seat_number <= pass.seats
+             )"),
             params![guild_id, now],
             |row| row.get::<_, i64>(0),
         )? != 0;
@@ -166,17 +172,17 @@ impl SqliteStore {
     ) -> Result<Option<i64>, StoreError> {
         self.connection()
             .query_row(
-                "SELECT MAX(expiry) FROM (
+                &format!("{RANKED_PASS_ACTIVATIONS} SELECT MAX(expiry) FROM (
                 SELECT expires_at AS expiry FROM premium_guild
                 WHERE guild_id = ?1 AND expires_at > ?2
                 UNION ALL
                 SELECT expires_at FROM discord_premium_entitlement
                 WHERE kind = 'guild' AND target_id = ?1 AND expires_at > ?2
                 UNION ALL
-                SELECT pass.expires_at FROM premium_pass_activation activation
+                SELECT pass.expires_at FROM ranked_pass_activations activation
                 JOIN premium_pass pass ON pass.user_id = activation.user_id
-                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
-             )",
+                WHERE activation.guild_id = ?1 AND pass.expires_at > ?2 AND activation.seat_number <= pass.seats
+             )"),
                 params![guild_id, now],
                 |row| row.get(0),
             )
@@ -267,12 +273,12 @@ impl SqliteStore {
     ) -> Result<Option<GuildPassOwner>, StoreError> {
         self.connection()
             .query_row(
-                "SELECT activation.user_id, pass.seats
-                 FROM premium_pass_activation activation
+                &format!("{RANKED_PASS_ACTIVATIONS} SELECT activation.user_id, pass.seats
+                 FROM ranked_pass_activations activation
                  JOIN premium_pass pass ON pass.user_id = activation.user_id
-                 WHERE activation.guild_id = ?1 AND pass.expires_at > ?2
+                 WHERE activation.guild_id = ?1 AND pass.expires_at > ?2 AND activation.seat_number <= pass.seats
                  ORDER BY activation.activated_at ASC
-                 LIMIT 1",
+                 LIMIT 1"),
                 params![guild_id, now],
                 |row| {
                     Ok(GuildPassOwner {
@@ -558,7 +564,9 @@ pub(crate) fn grant_guild_pass_on(
         .filter(|pass| pass.expires_at > now)
         .map_or(now, |pass| pass.expires_at)
         + days * DAY_MS;
-    let final_seats = current.map_or(seats, |pass| pass.seats.max(seats));
+    let final_seats = current
+        .filter(|pass| pass.expires_at > now)
+        .map_or(seats, |pass| pass.seats.max(seats));
     connection.execute(
         "INSERT INTO premium_pass (user_id, seats, expires_at, source) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(user_id) DO UPDATE SET seats = excluded.seats, expires_at = excluded.expires_at, source = excluded.source",
@@ -620,6 +628,56 @@ mod tests {
             store.user_premium_expiry("user").expect("expiry"),
             Some(NOW + 10 * DAY_MS)
         );
+    }
+
+    #[test]
+    fn lower_capacity_grants_only_carry_forward_unexpired_seats() {
+        for (offset, expected_seats) in [(-1, 5), (0, 2), (1, 2)] {
+            let store = SqliteStore::open_in_memory().expect("store");
+            let expiry = store
+                .grant_guild_pass("owner", 5, 1, "kofi", NOW)
+                .expect("old pass");
+            for guild in ["a", "b", "c"] {
+                assert_eq!(
+                    store
+                        .activate_seat("owner", guild, NOW)
+                        .expect("activate")
+                        .status,
+                    ActivateStatus::Ok
+                );
+            }
+            let renewal_at = expiry + offset;
+            store
+                .grant_guild_pass("owner", 2, 1, "redeem", renewal_at)
+                .expect("new lower-capacity pass");
+            assert_eq!(
+                store.premium_pass("owner").expect("pass").unwrap().seats,
+                expected_seats
+            );
+            assert!(store.is_guild_premium("a", renewal_at).expect("first seat"));
+            assert!(
+                store
+                    .is_guild_premium("b", renewal_at)
+                    .expect("second seat")
+            );
+            assert_eq!(
+                store
+                    .is_guild_premium("c", renewal_at)
+                    .expect("old excess seat"),
+                expected_seats == 5
+            );
+            assert_eq!(
+                store
+                    .activate_seat("owner", "d", renewal_at)
+                    .expect("capacity")
+                    .status,
+                if expected_seats == 5 {
+                    ActivateStatus::Ok
+                } else {
+                    ActivateStatus::NoSeats
+                }
+            );
+        }
     }
 
     #[test]

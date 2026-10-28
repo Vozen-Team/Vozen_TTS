@@ -6,6 +6,8 @@
 use regex::{Regex, RegexBuilder};
 
 pub const MAX_SYNTH_CHARS: usize = 2_400;
+// Bound every intermediate pronunciation result without truncating moderation input.
+const MAX_PRONUNCIATION_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PronunciationEntry {
@@ -76,15 +78,27 @@ pub fn has_readable_text(text: &str) -> bool {
 /// Each term is case-insensitive and must be delimited by non-letter/non-number
 /// characters, matching the legacy JavaScript lookaround rule. Replacements are always
 /// literal: administrator-controlled `$1` is spoken as `$1`, never interpreted as regex
-/// syntax.
+/// syntax. Excessive intermediate expansion is rejected as empty text.
 pub fn apply_pronunciation(text: &str, dictionary: &[PronunciationEntry]) -> String {
-    dictionary.iter().fold(text.to_owned(), |current, entry| {
-        let term = entry.term.trim();
-        if term.is_empty() {
-            return current;
-        }
-        replace_whole_word(&current, term, &entry.replacement)
-    })
+    apply_pronunciation_checked(text, dictionary).unwrap_or_default()
+}
+
+pub(crate) fn apply_pronunciation_checked(
+    text: &str,
+    dictionary: &[PronunciationEntry],
+) -> Option<String> {
+    if text.len() > MAX_PRONUNCIATION_BYTES {
+        return None;
+    }
+    dictionary
+        .iter()
+        .try_fold(text.to_owned(), |current, entry| {
+            let term = entry.term.trim();
+            if term.is_empty() {
+                return Some(current);
+            }
+            replace_whole_word(&current, term, &entry.replacement)
+        })
 }
 
 /// True when at least one blocked term appears as a complete Unicode word.
@@ -202,8 +216,28 @@ fn contains_whole_word(text: &str, term: &str) -> bool {
         .any(|matched| has_word_boundaries(text, matched.start(), matched.end()))
 }
 
-fn replace_whole_word(text: &str, term: &str, replacement: &str) -> String {
-    replace_whole_word_with(text, term, |_| replacement.to_owned()).0
+fn replace_whole_word(text: &str, term: &str, replacement: &str) -> Option<String> {
+    let regex = literal_case_insensitive_regex(term);
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for matched in regex.find_iter(text) {
+        if !has_word_boundaries(text, matched.start(), matched.end()) {
+            continue;
+        }
+        for piece in [&text[cursor..matched.start()], replacement] {
+            if piece.len() > MAX_PRONUNCIATION_BYTES - output.len() {
+                return None;
+            }
+            output.push_str(piece);
+        }
+        cursor = matched.end();
+    }
+    let remainder = &text[cursor..];
+    if remainder.len() > MAX_PRONUNCIATION_BYTES - output.len() {
+        return None;
+    }
+    output.push_str(remainder);
+    Some(output)
 }
 
 pub(crate) fn replace_whole_word_with<F>(text: &str, term: &str, replacement: F) -> (String, bool)
@@ -282,6 +316,48 @@ mod tests {
             apply_pronunciation("btw, BTW; btwx ola OlA", &dictionary),
             "R$1, R$1; btwx olá olá"
         );
+    }
+
+    #[test]
+    fn chained_personal_expansions_are_rejected_before_large_intermediate_allocations() {
+        let dictionary: Vec<_> = [("a", "b"), ("b", "c"), ("c", "d")]
+            .into_iter()
+            .map(|(term, word)| PronunciationEntry {
+                term: term.into(),
+                replacement: std::iter::repeat_n(word, 100).collect::<Vec<_>>().join(" "),
+            })
+            .collect();
+        let input = std::iter::repeat_n("a", 249).collect::<Vec<_>>().join(" ");
+        assert!(apply_pronunciation(&input, &dictionary).is_empty());
+        let literal = "é".repeat(MAX_PRONUNCIATION_BYTES / 2);
+        assert_eq!(
+            apply_pronunciation(
+                "a",
+                &[PronunciationEntry {
+                    term: "a".into(),
+                    replacement: literal.clone()
+                }]
+            ),
+            literal
+        );
+        assert!(
+            apply_pronunciation(
+                "a",
+                &[PronunciationEntry {
+                    term: "a".into(),
+                    replacement: "é".repeat(MAX_PRONUNCIATION_BYTES / 2 + 1)
+                }]
+            )
+            .is_empty()
+        );
+        let moderated = apply_pronunciation(
+            "a",
+            &[PronunciationEntry {
+                term: "a".into(),
+                replacement: format!("{} blocked", "safe ".repeat(1_000)),
+            }],
+        );
+        assert!(is_blocked(&moderated, &["blocked".into()]));
     }
 
     #[test]

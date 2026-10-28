@@ -4,8 +4,8 @@
 //! than accepting coordinates as if they were valid. Discord rendering, idle timers and scoring
 //! remain adapter concerns.
 
-use chess::{ChessMove, Color, Game, Piece, Square};
-use std::str::FromStr;
+use shakmaty::{Chess, Color, EnPassantMode, Move, Position, fen::Fen, san::San, uci::UciMove};
+use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChessColor {
@@ -58,7 +58,7 @@ pub enum ChessEvent {
 
 #[derive(Debug, Clone)]
 pub struct ChessGame {
-    game: Game,
+    game: Chess,
     white_id: Option<String>,
     black_id: Option<String>,
     white_name: Option<String>,
@@ -76,7 +76,7 @@ impl ChessGame {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            game: Game::new(),
+            game: Chess::default(),
             white_id: None,
             black_id: None,
             white_name: None,
@@ -112,14 +112,20 @@ impl ChessGame {
 
     #[must_use]
     pub fn turn(&self) -> ChessColor {
-        chess_color(self.game.side_to_move())
+        chess_color(self.game.turn())
     }
 
     /// Current board position in standard FEN form for a transport/rendering adapter. Keeping
     /// this as a value snapshot avoids exposing the third-party chess board type across crates.
     #[must_use]
     pub fn board_fen(&self) -> String {
-        self.game.current_position().to_string()
+        // Preserve the existing board-only FEN snapshot counters.
+        let mut setup = self.game.to_setup(EnPassantMode::Legal);
+        setup.halfmoves = 0;
+        setup.fullmoves = NonZeroU32::MIN;
+        Fen::try_from_setup(setup)
+            .expect("a legal standard chess position has a representable FEN")
+            .to_string()
     }
 
     /// Applies a move or resignation. The first two distinct users who submit a valid-looking
@@ -140,60 +146,53 @@ impl ChessGame {
         let Some(color) = self.seat(user_id, name) else {
             return ChessEvent::Spectator;
         };
-        let turn = self.game.side_to_move();
+        let turn = self.game.turn();
         if color.as_chess() != turn {
             return ChessEvent::NotYourTurn {
                 color: chess_color(turn),
             };
         }
-        let Some(chess_move) = parse_move(&self.game.current_position(), text) else {
+        let Some(chess_move) = parse_move(&self.game, text) else {
             return ChessEvent::IllegalMove {
                 text: text.to_owned(),
             };
         };
-        if !self.game.make_move(chess_move) {
+        if !self.game.is_legal(chess_move) {
             return ChessEvent::IllegalMove {
                 text: text.to_owned(),
             };
         }
-        match self.game.result() {
-            Some(chess::GameResult::WhiteCheckmates | chess::GameResult::BlackCheckmates) => {
-                self.over = true;
-                let (winner_id, winner_name) = if color == ChessColor::White {
-                    (
-                        self.white_id.clone().unwrap_or_default(),
-                        self.white_name.clone().unwrap_or_default(),
-                    )
-                } else {
-                    (
-                        self.black_id.clone().unwrap_or_default(),
-                        self.black_name.clone().unwrap_or_default(),
-                    )
-                };
-                ChessEvent::Checkmate {
-                    winner_id,
-                    winner_name,
-                    text: text.to_owned(),
-                }
+        self.game.play_unchecked(chess_move);
+        if self.game.is_checkmate() {
+            self.over = true;
+            let (winner_id, winner_name) = if color == ChessColor::White {
+                (
+                    self.white_id.clone().unwrap_or_default(),
+                    self.white_name.clone().unwrap_or_default(),
+                )
+            } else {
+                (
+                    self.black_id.clone().unwrap_or_default(),
+                    self.black_name.clone().unwrap_or_default(),
+                )
+            };
+            ChessEvent::Checkmate {
+                winner_id,
+                winner_name,
+                text: text.to_owned(),
             }
-            Some(
-                chess::GameResult::Stalemate
-                | chess::GameResult::DrawAccepted
-                | chess::GameResult::DrawDeclared,
-            ) => {
-                self.over = true;
-                ChessEvent::Draw {
-                    text: text.to_owned(),
-                }
+        } else if self.game.is_stalemate() {
+            self.over = true;
+            ChessEvent::Draw {
+                text: text.to_owned(),
             }
-            Some(chess::GameResult::WhiteResigns | chess::GameResult::BlackResigns) | None => {
-                ChessEvent::Moved {
-                    user_id: user_id.to_owned(),
-                    name: name.to_owned(),
-                    text: text.to_owned(),
-                    next: chess_color(self.game.side_to_move()),
-                    in_check: self.game.current_position().checkers().popcnt() > 0,
-                }
+        } else {
+            ChessEvent::Moved {
+                user_id: user_id.to_owned(),
+                name: name.to_owned(),
+                text: text.to_owned(),
+                next: chess_color(self.game.turn()),
+                in_check: self.game.is_check(),
             }
         }
     }
@@ -237,7 +236,7 @@ impl ChessGame {
         } else {
             self.white_name.clone().unwrap_or_default()
         };
-        if !self.game.resign(color.as_chess()) {
+        if self.game.is_checkmate() || self.game.is_stalemate() {
             return ChessEvent::Ignored;
         }
         self.over = true;
@@ -294,7 +293,7 @@ fn looks_like_move(text: &str) -> bool {
     castle || destination
 }
 
-fn parse_move(board: &chess::Board, text: &str) -> Option<ChessMove> {
+fn parse_move(board: &Chess, text: &str) -> Option<Move> {
     let lower = text.to_ascii_lowercase();
     let coordinate = lower.as_bytes();
     if (4..=5).contains(&coordinate.len())
@@ -303,24 +302,33 @@ fn parse_move(board: &chess::Board, text: &str) -> Option<ChessMove> {
         && coordinate[2].is_ascii_lowercase()
         && (b'1'..=b'8').contains(&coordinate[3])
     {
-        let source = Square::from_str(&lower[0..2]).ok()?;
-        let dest = Square::from_str(&lower[2..4]).ok()?;
-        let promotion = match coordinate.get(4) {
-            None => None,
-            Some(b'q') => Some(Piece::Queen),
-            Some(b'r') => Some(Piece::Rook),
-            Some(b'b') => Some(Piece::Bishop),
-            Some(b'n') => Some(Piece::Knight),
-            Some(_) => return None,
-        };
-        return Some(ChessMove::new(source, dest, promotion));
+        return UciMove::from_ascii(coordinate).ok()?.to_move(board).ok();
     }
     let san = if lower == "o-o" || lower == "o-o-o" {
         text.to_ascii_uppercase()
     } else {
         text.to_owned()
     };
-    ChessMove::from_san(board, &san).ok()
+    // Preserve the legacy promotion and explicit en-passant SAN spellings.
+    let explicit_en_passant = san.ends_with(" e.p.");
+    let san = san.strip_suffix(" e.p.").unwrap_or(&san);
+    let core = san.strip_suffix(['+', '#']).unwrap_or(san);
+    let mut normalized = san.to_owned();
+    let bytes = core.as_bytes();
+    if bytes.len() >= 2
+        && matches!(bytes[bytes.len() - 1], b'Q' | b'R' | b'B' | b'N')
+        && matches!(bytes[bytes.len() - 2], b'1' | b'8')
+    {
+        normalized.insert(core.len() - 1, '=');
+    }
+    let chess_move = San::from_ascii(normalized.as_bytes())
+        .ok()?
+        .to_move(board)
+        .ok()?;
+    if explicit_en_passant && !matches!(chess_move, Move::EnPassant { .. }) {
+        return None;
+    }
+    Some(chess_move)
 }
 
 #[cfg(test)]
@@ -445,5 +453,176 @@ mod tests {
             game.board_fen()
                 .starts_with("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w")
         );
+    }
+    #[test]
+    fn san_castling_and_board_only_fen_contract_are_preserved() {
+        let mut game = ChessGame::new();
+        for (index, text) in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Nf6", "o-o"]
+            .into_iter()
+            .enumerate()
+        {
+            let user = if index % 2 == 0 { "w" } else { "b" };
+            assert!(
+                matches!(game.play(user, user, text), ChessEvent::Moved { .. }),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            game.board_fen(),
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 0 1"
+        );
+    }
+
+    #[test]
+    fn en_passant_and_uppercase_coordinates_keep_standard_legality() {
+        let mut game = ChessGame::new();
+        for (index, text) in ["E2E4", "a6", "e5", "f5", "exf6"].into_iter().enumerate() {
+            let user = if index % 2 == 0 { "w" } else { "b" };
+            assert!(
+                matches!(game.play(user, user, text), ChessEvent::Moved { .. }),
+                "{text}"
+            );
+        }
+        assert!(
+            game.board_fen()
+                .starts_with("rnbqkbnr/1pppp1pp/p4P2/8/8/8/PPPP1PPP/RNBQKBNR b")
+        );
+    }
+
+    fn position(fen: &str) -> ChessGame {
+        ChessGame {
+            game: Fen::from_ascii(fen.as_bytes())
+                .unwrap()
+                .into_position(shakmaty::CastlingMode::Standard)
+                .unwrap(),
+            ..ChessGame::new()
+        }
+    }
+
+    #[test]
+    fn all_promotions_are_legal_but_missing_promotion_is_rejected() {
+        for (suffix, piece) in [('q', 'Q'), ('r', 'R'), ('b', 'B'), ('n', 'N')] {
+            let mut game = position("7k/P7/8/8/8/8/8/K7 w - - 0 1");
+            let text = format!("a7a8{suffix}");
+            assert!(matches!(
+                game.play("w", "White", &text),
+                ChessEvent::Moved { .. }
+            ));
+            assert!(game.board_fen().starts_with(&format!("{piece}6k/")));
+        }
+        let mut game = position("7k/P7/8/8/8/8/8/K7 w - - 0 1");
+        assert!(matches!(
+            game.play("w", "White", "a7a8"),
+            ChessEvent::IllegalMove { .. }
+        ));
+    }
+
+    #[test]
+    fn legacy_san_promotion_and_en_passant_aliases_remain_legal() {
+        for piece in ['Q', 'R', 'B', 'N'] {
+            for text in [format!("a8{piece}"), format!("a8={piece}")] {
+                let mut game = position("7k/P7/8/8/8/8/8/K7 w - - 0 1");
+                assert!(
+                    matches!(game.play("w", "White", &text), ChessEvent::Moved { .. }),
+                    "{text}"
+                );
+                assert!(game.board_fen().starts_with(&format!("{piece}6k/")));
+            }
+        }
+        let mut game = ChessGame::new();
+        for (index, text) in ["e4", "a6", "e5", "f5", "exf6 e.p."]
+            .into_iter()
+            .enumerate()
+        {
+            let user = if index % 2 == 0 { "w" } else { "b" };
+            assert!(
+                matches!(game.play(user, user, text), ChessEvent::Moved { .. }),
+                "{text}"
+            );
+        }
+        assert!(game.board_fen().starts_with("rnbqkbnr/1pppp1pp/p4P2/"));
+        let mut game = ChessGame::new();
+        assert!(matches!(
+            game.play("w", "White", "e4 e.p."),
+            ChessEvent::IllegalMove { .. }
+        ));
+    }
+
+    #[test]
+    fn pinned_moves_and_castling_through_check_do_not_change_position() {
+        for (fen, text) in [
+            ("4r2k/8/8/8/8/8/4R3/4K3 w - - 0 1", "e2f2"),
+            ("k4r2/8/8/8/8/8/8/4K2R w K - 0 1", "O-O"),
+        ] {
+            let mut game = position(fen);
+            let before = game.board_fen();
+            assert!(matches!(
+                game.play("w", "White", text),
+                ChessEvent::IllegalMove { .. }
+            ));
+            assert_eq!(game.board_fen(), before);
+            assert_eq!(game.turn(), ChessColor::White);
+        }
+    }
+
+    #[test]
+    fn stalemate_and_san_checkmate_keep_terminal_event_contracts() {
+        let mut stalemate = position("7k/5Q2/6K1/8/8/8/8/8 w - - 0 1");
+        assert!(matches!(
+            stalemate.play("w", "White", "Qe6"),
+            ChessEvent::Draw { .. }
+        ));
+        assert!(stalemate.is_over());
+        let mut mate = ChessGame::new();
+        for (index, text) in ["f3", "e5", "g4", "Qh4#"].into_iter().enumerate() {
+            let user = if index % 2 == 0 { "w" } else { "b" };
+            let event = mate.play(user, user, text);
+            if index == 3 {
+                assert!(
+                    matches!(event, ChessEvent::Checkmate { winner_id, text, .. } if winner_id == "b" && text == "Qh4#")
+                );
+            }
+        }
+        assert_eq!(mate.play("w", "White", "e4"), ChessEvent::Closed);
+    }
+
+    #[test]
+    fn engine_replacement_does_not_introduce_automatic_draws() {
+        let mut game = ChessGame::new();
+        for _ in 0..3 {
+            for (index, text) in ["Nf3", "Nf6", "Ng1", "Ng8"].into_iter().enumerate() {
+                let user = if index % 2 == 0 { "w" } else { "b" };
+                assert!(matches!(
+                    game.play(user, user, text),
+                    ChessEvent::Moved { .. }
+                ));
+            }
+        }
+        assert!(!game.is_over());
+        let mut bare_kings = position("7k/8/6K1/8/8/8/8/8 w - - 0 1");
+        assert!(matches!(
+            bare_kings.play("w", "White", "g6f6"),
+            ChessEvent::Moved { .. }
+        ));
+        let mut move_count = position("7k/8/8/8/8/8/8/KN6 w - - 99 50");
+        assert!(matches!(
+            move_count.play("w", "White", "b1c3"),
+            ChessEvent::Moved { .. }
+        ));
+    }
+
+    #[test]
+    fn resignation_aliases_work_out_of_turn_and_preserve_player_contracts() {
+        for alias in ["resign", "RESIGNS", " i resign ", "desisto", "desistir"] {
+            let mut game = ChessGame::new();
+            assert_eq!(game.play("spectator", "Other", alias), ChessEvent::Ignored);
+            let _ = game.play("w", "White", "e4");
+            assert_eq!(game.play("w", "White", alias), ChessEvent::Ignored);
+            let _ = game.play("b", "Black", "e5");
+            assert!(
+                matches!(game.play("b", "Updated Black", alias), ChessEvent::Resigned { winner_id, user_name, .. } if winner_id == "w" && user_name == "Updated Black")
+            );
+            assert_eq!(game.play("w", "White", "e4"), ChessEvent::Closed);
+        }
     }
 }

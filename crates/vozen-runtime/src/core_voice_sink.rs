@@ -86,6 +86,7 @@ struct VoiceDependencies {
 }
 
 const GAME_PICK_TTL_MS: i64 = 60_000;
+const MAX_PENDING_GAME_PICKS: usize = 1024;
 const GAME_THREAD_DELETE_DELAY: Duration = Duration::from_secs(5);
 const GAME_LANGUAGE_CHOICES: [(&str, &str); 4] = [
     ("en", "English"),
@@ -168,16 +169,20 @@ impl GameRuntime {
 
     fn prune_picks(&self, now_ms: i64) {
         if let Ok(mut picks) = self.pending_picks.lock() {
-            picks.retain(|_, pick| now_ms.saturating_sub(pick.issued_at_ms) <= GAME_PICK_TTL_MS);
-            if picks.len() > 1024 {
-                let mut old = picks
-                    .iter()
-                    .map(|(id, pick)| (id.clone(), pick.issued_at_ms))
-                    .collect::<Vec<_>>();
-                old.sort_by_key(|(_, issued_at)| *issued_at);
-                for (id, _) in old.into_iter().take(picks.len() - 1024) {
-                    picks.remove(&id);
-                }
+            Self::prune_picks_locked(&mut picks, now_ms);
+        }
+    }
+
+    fn prune_picks_locked(picks: &mut BTreeMap<String, PendingGamePick>, now_ms: i64) {
+        picks.retain(|_, pick| now_ms.saturating_sub(pick.issued_at_ms) <= GAME_PICK_TTL_MS);
+        if picks.len() > MAX_PENDING_GAME_PICKS {
+            let mut old = picks
+                .iter()
+                .map(|(id, pick)| (id.clone(), pick.issued_at_ms))
+                .collect::<Vec<_>>();
+            old.sort_by_key(|(_, issued_at)| *issued_at);
+            for (id, _) in old.into_iter().take(picks.len() - MAX_PENDING_GAME_PICKS) {
+                picks.remove(&id);
             }
         }
     }
@@ -1002,6 +1007,7 @@ impl GameRuntime {
                     "google",
                 )?;
                 if let Ok(mut picks) = self.pending_picks.lock() {
+                    let now_ms = system_now_ms();
                     picks.insert(
                         format!("gamePick:{}", command.id.get()),
                         PendingGamePick {
@@ -1013,9 +1019,10 @@ impl GameRuntime {
                             engine: "google".to_owned(),
                             locale,
                             guild_locale,
-                            issued_at_ms: system_now_ms(),
+                            issued_at_ms: now_ms,
                         },
                     );
+                    Self::prune_picks_locked(&mut picks, now_ms);
                 }
                 context
                     .http
@@ -4122,6 +4129,36 @@ fn queue_lane_label(lane: QueueLane) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abandoned_picker_insertions_obey_capacity_and_ttl_without_component_activity() {
+        let pick = |issued_at_ms| PendingGamePick {
+            guild_id: "guild".into(),
+            parent_channel_id: "text".into(),
+            user_id: "user".into(),
+            selected_game: None,
+            language: None,
+            engine: "google".into(),
+            locale: "en".into(),
+            guild_locale: None,
+            issued_at_ms,
+        };
+        let mut picks = BTreeMap::new();
+        for index in 0..(MAX_PENDING_GAME_PICKS + 50) {
+            picks.insert(format!("pick-{index}"), pick(index as i64));
+            GameRuntime::prune_picks_locked(&mut picks, index as i64);
+            assert!(picks.len() <= MAX_PENDING_GAME_PICKS);
+        }
+        assert!(!picks.contains_key("pick-0"));
+        let now = GAME_PICK_TTL_MS + MAX_PENDING_GAME_PICKS as i64 + 51;
+        picks.insert("new".into(), pick(now));
+        GameRuntime::prune_picks_locked(&mut picks, now);
+        assert_eq!(
+            picks.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["new"]
+        );
+    }
+
     use vozen_discord::CoreVoiceSettings;
 
     #[test]

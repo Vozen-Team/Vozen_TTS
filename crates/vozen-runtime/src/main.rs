@@ -2241,6 +2241,10 @@ async fn run() -> Result<(), RuntimeError> {
         store
             .lock()
             .map_err(|_| RuntimeError::StoreLock)?
+            .initialize_gcloud_quota_secret(redemption_secret)?;
+        store
+            .lock()
+            .map_err(|_| RuntimeError::StoreLock)?
             .initialize_vote_redemption_ledger(redemption_secret)?;
     }
     register_rust_commands_if_enabled(&config).await?;
@@ -2854,7 +2858,8 @@ const GCLOUD_RETENTION_MS: i64 = 92 * 86_400_000;
 
 fn purge_gcloud_retention(store: &SqliteStore, now: i64) -> Result<usize, vozen_store::StoreError> {
     let cutoff = month_key_utc(now.saturating_sub(GCLOUD_RETENTION_MS));
-    store.purge_old_gcloud_usage(&cutoff)
+    let expired = store.purge_expired_gcloud_quota(&month_key_utc(now))?;
+    Ok(expired + store.purge_old_gcloud_usage(&cutoff)?)
 }
 
 fn spawn_gcloud_retention(store: Arc<Mutex<SqliteStore>>) {
