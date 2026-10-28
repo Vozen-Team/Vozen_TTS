@@ -229,14 +229,10 @@ impl SqliteStore {
                     )?;
                 }
                 PrivacyPurgeKey::GcloudPersonalKey => {
-                    // gcloud `key` is a user ID for personal/pass usage; guild-level usage has a
-                    // guild ID and remains under the departed-guild/retention policy.
-                    transaction.execute(
-                        &format!(
-                            "DELETE FROM {} WHERE key = ?1 AND scope IN ('user', 'pass')",
-                            spec.table
-                        ),
-                        params![user_id],
+                    self.erase_personal_gcloud_on(
+                        &transaction,
+                        user_id,
+                        &crate::month_key_utc(crate::gcloud_usage::current_time_ms()),
                     )?;
                 }
                 PrivacyPurgeKey::GuildId => unreachable!("guild key in user erase spec"),

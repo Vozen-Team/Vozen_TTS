@@ -141,3 +141,17 @@ Keep it factual: Discord ID + monthly HD-TTS char count, erasable via `/privacy 
   fails CI until categorized or explicitly exempt — this is the intended friction.
 - `kofi_supporter` erase is keyed by `discord_id`; if the schema ever renames that
   column, update the bespoke delete.
+
+
+## Current Rust Google HD quota retention (2026-10-28)
+
+The approved Rust implementation removes raw user/pass identifiers on an actual future
+privacy erase while retaining the current UTC month's character count as a domain-separated
+HMAC of scope, month and user ID. New personal/pass counter writes use that HMAC; reads
+and reservations include any existing raw row, without a startup data migration. The
+existing stable VOTE_REDEMPTION_SECRET and pinned fingerprint are reused, with no new
+schema, dependency or configuration variable. Missing or mismatched keys fail closed.
+The daily cleanup removes HMAC counters after month end; existing legacy raw-row, guild
+and global retention remains unchanged. Counter rows contain no text or audio. Pending
+user-data invalidation, paid grants and the global daily budget remain intact. Mirror
+tombstones still delete raw user/pass rows; no existing database is rewritten by deployment.

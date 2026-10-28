@@ -159,6 +159,8 @@ pub enum StoreError {
     InvalidBirthday,
     #[error("invalid Google HD usage scope key")]
     InvalidGcloudKey,
+    #[error("Google personal quota requires an initialized stable redemption secret")]
+    GcloudQuotaSecretUnavailable,
     #[error("invalid Google HD usage month")]
     InvalidGcloudMonth,
     #[error("invalid Google HD usage day")]
@@ -219,6 +221,7 @@ pub enum StoreError {
 pub struct SqliteStore {
     connection: Connection,
     pending_user_data: PendingUserData,
+    gcloud_quota_secret: Option<String>,
 }
 
 impl SqliteStore {
@@ -376,6 +379,7 @@ impl SqliteStore {
         Ok(Self {
             connection,
             pending_user_data: PendingUserData::default(),
+            gcloud_quota_secret: None,
         })
     }
 
