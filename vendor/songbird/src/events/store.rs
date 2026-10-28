@@ -128,7 +128,7 @@ impl EventStore {
                 let evt = &mut events[i];
                 // Only remove/readd if the event type changes (i.e., Some AND new != old)
                 if let Some(new_evt_type) = evt.action.act(&ctx).await {
-                    if evt.event == new_evt_type {
+                    if evt.event != new_evt_type {
                         let mut evt = events.remove(i);
 
                         evt.event = new_evt_type;
@@ -258,6 +258,37 @@ impl GlobalEvents {
         // Now drain vecs.
         for indices in self.awaiting_tick.values_mut() {
             indices.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+    struct Count { calls: Arc<AtomicUsize>, reply: Option<Event> }
+    #[async_trait::async_trait]
+    impl EventHandler for Count {
+        async fn act(&self, _: &EventContext<'_>) -> Option<Event> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.reply
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_removes_only_its_handler_and_same_type_remains_installed() {
+        for reply in [None, Some(Event::Track(TrackEvent::End)), Some(Event::Cancel)] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let other = Arc::new(AtomicUsize::new(0));
+            let mut store = EventStore::new();
+            store.add_event(EventData::new(Event::Track(TrackEvent::End), Count { calls: calls.clone(), reply }), Duration::ZERO);
+            store.add_event(EventData::new(Event::Track(TrackEvent::End), Count { calls: other.clone(), reply: None }), Duration::ZERO);
+            for _ in 0..2 {
+                store.process_untimed(Duration::ZERO, TrackEvent::End.into(), EventContext::Track(&[])).await;
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), if reply == Some(Event::Cancel) { 1 } else { 2 });
+            assert_eq!(other.load(Ordering::SeqCst), 2);
         }
     }
 }

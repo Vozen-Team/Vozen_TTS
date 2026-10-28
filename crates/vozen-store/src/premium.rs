@@ -586,7 +586,9 @@ pub(crate) fn grant_guild_pass_on(
         .filter(|pass| pass.expires_at > now)
         .map_or(now, |pass| pass.expires_at)
         + days * DAY_MS;
-    let final_seats = current.map_or(seats, |pass| pass.seats.max(seats));
+    let final_seats = current
+        .filter(|pass| pass.expires_at > now)
+        .map_or(seats, |pass| pass.seats.max(seats));
     connection.execute(
         "INSERT INTO premium_pass (user_id, seats, expires_at, source) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(user_id) DO UPDATE SET seats = excluded.seats, expires_at = excluded.expires_at, source = excluded.source",
@@ -648,6 +650,60 @@ mod tests {
             store.user_premium_expiry("user").expect("expiry"),
             Some(NOW + 10 * DAY_MS)
         );
+    }
+
+    #[test]
+    fn lower_capacity_grants_only_carry_forward_unexpired_seats() {
+        for (offset, expected_seats) in [(-1, 5), (0, 2), (1, 2)] {
+            let store = SqliteStore::open_in_memory().expect("store");
+            let expiry = store
+                .grant_guild_pass("owner", 5, 1, "kofi", NOW)
+                .expect("old pass");
+            for guild in ["a", "b", "c"] {
+                assert_eq!(
+                    store
+                        .activate_seat("owner", guild, NOW)
+                        .expect("activate")
+                        .status,
+                    ActivateStatus::Ok
+                );
+            }
+            let renewal_at = expiry + offset;
+            store
+                .grant_guild_pass("owner", 2, 1, "redeem", renewal_at)
+                .expect("new lower-capacity pass");
+            assert_eq!(
+                store
+                    .premium_pass_at("owner", renewal_at)
+                    .expect("pass")
+                    .unwrap()
+                    .seats,
+                expected_seats
+            );
+            assert!(store.is_guild_premium("a", renewal_at).expect("first seat"));
+            assert!(
+                store
+                    .is_guild_premium("b", renewal_at)
+                    .expect("second seat")
+            );
+            assert_eq!(
+                store
+                    .is_guild_premium("c", renewal_at)
+                    .expect("old excess seat"),
+                expected_seats == 5
+            );
+            assert_eq!(
+                store
+                    .activate_seat("owner", "d", renewal_at)
+                    .expect("capacity")
+                    .status,
+                if expected_seats == 5 {
+                    ActivateStatus::Ok
+                } else {
+                    ActivateStatus::NoSeats
+                }
+            );
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ form_urlencoded.workspace = true
 uuid.workspace = true
 whatlang.workspace = true
 unicode-normalization.workspace = true
-chess.workspace = true
+shakmaty.workspace = true
 
 [lints]
 workspace = true

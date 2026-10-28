@@ -36,6 +36,10 @@ jobs:
           node-version: 22
       - run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup component add clippy rustfmt --toolchain 1.97.1
+      - name: Audit locked runtime dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
       - run: npm run check:rust-contracts
       - run: node tools/check-vendored-voice.mjs
       - name: Build the unmodified published Davey interoperability peer
@@ -56,6 +60,58 @@ jobs:
       - run: npm run check:rust-voice
       # The VPS image is optimized; keep the release + Songbird path green in CI as well.
       - run: cargo test --release -p vozen-runtime --features voice-driver
+      # Vendored dependencies are excluded from normal workspace tests. Temporarily enroll
+      # Songbird only after those gates, restoring the production manifests even on failure.
+      - name: Test vendored voice security regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Cargo.toml "$RUNNER_TEMP/vozen-test-workspace.toml"
+          cp Cargo.lock "$RUNNER_TEMP/vozen-test-workspace.lock"
+          cp vendor/songbird/Cargo.toml "$RUNNER_TEMP/vozen-test-songbird.toml"
+          trap 'cp "$RUNNER_TEMP/vozen-test-workspace.toml" Cargo.toml; cp "$RUNNER_TEMP/vozen-test-workspace.lock" Cargo.lock; cp "$RUNNER_TEMP/vozen-test-songbird.toml" vendor/songbird/Cargo.toml' EXIT
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          manifest = Path('Cargo.toml')
+          text = manifest.read_text()
+          old = '  "crates/vozen-runtime",\n]'
+          assert text.count(old) == 1
+          text = text.replace(old, '  "crates/vozen-runtime",\n  "vendor/songbird",\n]')
+          old = 'exclude = ["vendor/songbird", "vendor/davey"]'
+          assert text.count(old) == 1
+          manifest.write_text(text.replace(old, 'exclude = ["vendor/davey"]'))
+          # Enrolment otherwise resolves unused Rustls backends too; production uses native TLS.
+          # Restrict only this temporary test manifest to the backend exercised below.
+          import re
+          vendor = Path('vendor/songbird/Cargo.toml')
+          text, count = re.subn(r'(?m)^rustls = \[.*?^\]', 'rustls = []', vendor.read_text(), flags=re.S)
+          assert count == 1
+          old = 'rust-version = "1.83.0"'
+          assert text.count(old) == 1
+          text = text.replace(old, 'rust-version = "1.97"')
+          vendor.write_text(text)
+          # The crate archive omits the WAV used by unrelated upstream test helpers.
+          # Only our offline security_tests run; this inert fixture permits compiling helpers.
+          import wave
+          fixture = Path('vendor/songbird/resources/loop.wav')
+          assert not fixture.exists()
+          fixture.parent.mkdir(exist_ok=True)
+          with wave.open(str(fixture), 'wb') as pcm:
+              pcm.setnchannels(2)
+              pcm.setsampwidth(2)
+              pcm.setframerate(48000)
+              pcm.writeframes(bytes(1920))
+          PYCODE
+          cargo test -p songbird --lib --no-default-features --features driver,receive,gateway,native,tungstenite,serenity,builtin-queue security_tests
+          cargo audit
+          python3 - <<'PYCODE'
+          import os, tomllib
+          from pathlib import Path
+          def packages(path):
+              return {(p['name'], p['version'], p.get('source')) for p in tomllib.loads(path.read_text())['package']}
+          missing = packages(Path(os.environ['RUNNER_TEMP']) / 'vozen-test-workspace.lock') - packages(Path('Cargo.lock'))
+          assert not missing, f'Existing locked packages changed during vendor tests: {sorted(missing, key=str)}'
+          PYCODE
 
   # Build the same Linux image used by the explicit Rust staging override. This is intentionally
   # separate from the runtime tests: a Windows/MSVC build can pass while the Debian/Opus image
