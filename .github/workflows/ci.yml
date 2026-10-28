@@ -60,6 +60,35 @@ jobs:
       - run: npm run check:rust-voice
       # The VPS image is optimized; keep the release + Songbird path green in CI as well.
       - run: cargo test --release -p vozen-runtime --features voice-driver
+      # Vendored dependencies are excluded from normal workspace tests. Temporarily enroll
+      # Songbird only after those gates, restoring the production manifests even on failure.
+      - name: Test vendored voice security regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Cargo.toml "$RUNNER_TEMP/vozen-test-workspace.toml"
+          cp Cargo.lock "$RUNNER_TEMP/vozen-test-workspace.lock"
+          trap 'cp "$RUNNER_TEMP/vozen-test-workspace.toml" Cargo.toml; cp "$RUNNER_TEMP/vozen-test-workspace.lock" Cargo.lock' EXIT
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          manifest = Path('Cargo.toml')
+          text = manifest.read_text()
+          old = '  "crates/vozen-runtime",\n]'
+          assert text.count(old) == 1
+          text = text.replace(old, '  "crates/vozen-runtime",\n  "vendor/songbird",\n]')
+          old = 'exclude = ["vendor/songbird", "vendor/davey"]'
+          assert text.count(old) == 1
+          manifest.write_text(text.replace(old, 'exclude = ["vendor/davey"]'))
+          PYCODE
+          cargo test -p songbird --lib --no-default-features --features driver,receive,native,tungstenite,serenity
+          cargo audit
+          python3 - <<'PYCODE'
+          import os, tomllib
+          from pathlib import Path
+          def packages(path):
+              return {(p['name'], p['version'], p.get('source')) for p in tomllib.loads(path.read_text())['package']}
+          assert packages(Path(os.environ['RUNNER_TEMP']) / 'vozen-test-workspace.lock') <= packages(Path('Cargo.lock')), 'Existing locked packages changed during vendor tests'
+          PYCODE
 
   # Build the same Linux image used by the explicit Rust staging override. This is intentionally
   # separate from the runtime tests: a Windows/MSVC build can pass while the Debian/Opus image

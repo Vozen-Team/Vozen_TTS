@@ -24,7 +24,7 @@ use serenity::{
         voice::VoiceState,
     },
 };
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use vozen_discord::{
     GatewayEventDispatchError, GatewayEventSink, ReceivedUtterance, SongbirdVoiceReceiver,
@@ -40,6 +40,8 @@ use crate::{
 
 const FRAME_SAMPLES: usize = 1_920;
 const MAX_SESSION_SECONDS: u64 = 20;
+// Four 20-second PCM turns cap queued audio at roughly 15 MiB per active session.
+const MAX_QUEUED_UTTERANCES: usize = 4;
 
 fn session_should_stop(bot_left: bool, humans_empty: bool, no_consent: bool) -> bool {
     bot_left || humans_empty || no_consent
@@ -377,7 +379,7 @@ impl LiveTranscriptionGatewaySink {
             FRAME_SAMPLES,
             Arc::new(move |user_id| registry.is_consented(&guild_for_gate, user_id)),
         );
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(MAX_QUEUED_UTTERANCES);
         let songbird_receiver = SongbirdVoiceReceiver::new(receiver, tx, FRAME_SAMPLES);
         {
             let mut handler = call.lock().await;
@@ -452,7 +454,7 @@ impl LiveTranscriptionGatewaySink {
         &self,
         channel_id: ChannelId,
         http: Arc<serenity::http::Http>,
-        mut rx: UnboundedReceiver<ReceivedUtterance>,
+        mut rx: Receiver<ReceivedUtterance>,
         language: Option<String>,
         guild_key: String,
         quota_notified: Arc<Mutex<BTreeSet<String>>>,

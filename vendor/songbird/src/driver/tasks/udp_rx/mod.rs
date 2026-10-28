@@ -168,23 +168,22 @@ impl UdpRx {
                 }
 
                 let mut packet_data = if self.config.decode_mode.should_decrypt() {
-                    let out = self.cipher.decrypt_rtp_in_place(&mut rtp).map(|(s, t)| {
-                        if rtp.get_padding() != 0 {
-                            let payload = rtp.payload();
-                            let payload_length = payload.len();
-                            let padding_count = payload[payload_length - t - 1] as usize;
-
-                            (s, t + padding_count, true)
-                        } else {
-                            (s, t, true)
-                        }
-                    });
-
-                    if let Err(ref e) = out {
-                        warn!("RTP decryption failed: {:?}", e);
+                    let (start, mut tail) = match self.cipher.decrypt_rtp_in_place(&mut rtp) {
+                        Ok(bounds) => bounds,
+                        Err(error) => {
+                            warn!("RTP decryption failed: {:?}", error);
+                            return;
+                        },
+                    };
+                    let payload = rtp.payload();
+                    let Some(end) = payload.len().checked_sub(tail) else { return; };
+                    let Some(body) = payload.get(start..end) else { return; };
+                    if rtp.get_padding() != 0 {
+                        let Some(&padding) = body.last() else { return; };
+                        if padding == 0 || usize::from(padding) > body.len() { return; }
+                        tail += usize::from(padding);
                     }
-
-                    out.ok()
+                    Some((start, tail, true))
                 } else {
                     None
                 };
@@ -287,11 +286,13 @@ impl UdpRx {
                 let packet_data = if self.config.decode_mode.should_decrypt() {
                     let out = self.cipher.decrypt_rtcp_in_place(&mut rtcp);
 
-                    if let Err(ref e) = out {
-                        warn!("RTCP decryption failed: {:?}", e);
+                    match out {
+                        Ok(bounds) => Some(bounds),
+                        Err(error) => {
+                            warn!("RTCP decryption failed: {:?}", error);
+                            return;
+                        },
                     }
-
-                    out.ok()
                 } else {
                     None
                 };
@@ -355,4 +356,69 @@ pub(crate) async fn runner(
 #[inline]
 fn rtp_valid(packet: &RtpPacket<'_>) -> bool {
     packet.get_version() == RTP_VERSION && packet.get_payload_type() == RTP_PROFILE_TYPE
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use crate::driver::crypto::CryptoState;
+    use discortp::rtp::MutableRtpPacket;
+
+    fn packet(payload: usize, ssrc: u32) -> BytesMut {
+        let mut bytes = BytesMut::zeroed(MutableRtpPacket::minimum_packet_size() + payload);
+        bytes[0] = 0x80;
+        bytes[1] = 120;
+        bytes[8..12].copy_from_slice(&ssrc.to_be_bytes());
+        bytes
+    }
+
+    #[tokio::test]
+    async fn authentication_failure_never_creates_decoders_or_emits_packets() {
+        for mode in [CryptoMode::Aes256Gcm, CryptoMode::XChaCha20Poly1305] {
+            for decode_mode in [DecodeMode::Decrypt, DecodeMode::Decode(Default::default())] {
+                let (core, _core_rx) = flume::unbounded();
+                let (events, event_rx) = flume::unbounded();
+                let (mixer, _mixer_rx) = flume::unbounded();
+                let interconnect = Interconnect { core, events, mixer };
+                let (_tx, rx) = flume::unbounded();
+                let mut config = Config::default();
+                config.decode_mode = decode_mode;
+                let mut receiver = UdpRx {
+                    cipher: mode.cipher_from_key(&[7; 32]).unwrap(), crypto_mode: mode,
+                    decoder_map: HashMap::new(), config, rx,
+                    ssrc_signalling: Arc::new(SsrcTracker::default()),
+                    udp_socket: UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+                    dave_session: Arc::new(RwLock::new(None)),
+                    dave_protocol_version: Arc::new(AtomicU16::new(0)),
+                };
+                for size in 0..32 {
+                    receiver.process_udp_message(&interconnect, packet(size, size as u32 + 1)).await;
+                }
+                let mut rtcp = BytesMut::zeroed(28);
+                rtcp[0] = 0x80; rtcp[1] = 200;
+                rtcp[2..4].copy_from_slice(&6u16.to_be_bytes());
+                receiver.process_udp_message(&interconnect, rtcp).await;
+                assert!(receiver.decoder_map.is_empty());
+                assert!(event_rx.try_recv().is_err());
+                let mut valid = packet(3 + mode.payload_suffix_len(), 99);
+                let mut rtp = MutableRtpPacket::new(&mut valid).unwrap();
+                rtp.payload_mut()[..3].copy_from_slice(&[0xf8, 0xff, 0xfe]);
+                let len = CryptoState::from(mode).write_packet_nonce(&mut rtp, 3);
+                receiver.cipher.encrypt_pkt_in_place(&mut rtp, len).unwrap();
+                receiver.process_udp_message(&interconnect, valid).await;
+                assert!(receiver.decoder_map.contains_key(&99));
+                assert!(event_rx.try_recv().is_ok());
+                for body_len in [0, 1] {
+                    let mut invalid_padding = packet(body_len + mode.payload_suffix_len(), 100 + body_len as u32);
+                    let mut rtp = MutableRtpPacket::new(&mut invalid_padding).unwrap();
+                    rtp.set_padding(1);
+                    let len = CryptoState::from(mode).write_packet_nonce(&mut rtp, body_len);
+                    receiver.cipher.encrypt_pkt_in_place(&mut rtp, len).unwrap();
+                    receiver.process_udp_message(&interconnect, invalid_padding).await;
+                    assert!(!receiver.decoder_map.contains_key(&(100 + body_len as u32)));
+                    assert!(event_rx.try_recv().is_err());
+                }
+            }
+        }
+    }
 }

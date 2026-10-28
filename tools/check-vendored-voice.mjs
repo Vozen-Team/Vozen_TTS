@@ -41,5 +41,5 @@ assert.match(
   /name = "ringbuf"\nversion = "0\.5\.3"/,
 );
 console.log(
-  'Vendored voice libraries match upstream except documented dependency and API compatibility changes.',
+  'Vendored voice libraries match upstream except documented dependency, API compatibility and security changes.',
 );
