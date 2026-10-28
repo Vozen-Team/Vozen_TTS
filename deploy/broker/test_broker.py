@@ -25,25 +25,82 @@ def encoded(value):
 
 
 class CapacityTests(unittest.TestCase):
-    def check(self, separate, root_free, image_free):
+    def check(self, separate, root_free, image_free, reservations):
         def filesystem(path, **kwargs):
-            return SimpleNamespace(st_dev=1 if path == broker.STATE or not separate else 2)
+            return SimpleNamespace(st_dev=1 if path == broker.IMAGE_SNAPSHOTS or not separate else 2)
         def free(path):
-            return SimpleNamespace(free=root_free if path == broker.STATE else image_free)
+            return SimpleNamespace(free=root_free if path == broker.IMAGE_SNAPSHOTS or not separate else image_free)
         with patch.object(pathlib.Path, "stat", autospec=True, side_effect=filesystem), patch.object(broker.shutil, "disk_usage", side_effect=free):
-            broker.require_disk_headroom()
+            broker.require_disk_headroom(reservations)
 
-    def test_shared_filesystem_reserves_archive_content_and_snapshots_together(self):
-        self.check(False, 20 * 1024**3, 20 * 1024**3)
+    def test_primary_filesystem_reserves_content_and_snapshots_together(self):
+        reservations = [(broker.IMAGE_CONTENT, 3 * 1024**3), (broker.IMAGE_SNAPSHOTS, 3 * 1024**3)]
+        self.check(False, 8 * 1024**3, 8 * 1024**3, reservations)
         with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
-            self.check(False, 12 * 1024**3, 12 * 1024**3)
+            self.check(False, 7 * 1024**3, 7 * 1024**3, reservations)
+
+    def test_primary_budget_has_exact_combined_margin_and_guard_boundary(self):
+        sizes = (2 * 1024**3 + 123, 3 * 1024**3 + 456)
+        total = sum(sizes)
+        required = total + (total + 9) // 10 + 1024**3
+        reservations = list(zip((broker.IMAGE_CONTENT, broker.IMAGE_SNAPSHOTS), sizes))
+        for free in (max(sizes) + 1024**3, total, required):
+            with self.subTest(free=free), self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+                self.check(False, free, free, reservations)
+        self.check(False, required + 1, required + 1, reservations)
+
+    def test_initial_archive_budget_has_margin_and_guard(self):
+        required = broker.MAX_ARCHIVE + (broker.MAX_ARCHIVE + 9) // 10 + 1024**3
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(False, required, required, [(broker.STAGING, broker.MAX_ARCHIVE)])
+        self.check(False, required + 1, required + 1, [(broker.STAGING, broker.MAX_ARCHIVE)])
+
+    def test_measured_archive_fits_primary_budget_without_worst_case_reservation(self):
+        expanded = 2_982_846_464
+        free_after_copy = 10_853_363_712 - 1_428_070_112
+        reservations = [(broker.IMAGE_CONTENT, expanded), (broker.IMAGE_SNAPSHOTS, expanded)]
+        self.check(False, free_after_copy, free_after_copy, reservations)
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(False, 7_636_004_045, 7_636_004_045, reservations)
 
     def test_separate_filesystems_keep_their_own_reservations(self):
-        self.check(True, 4 * 1024**3, 20 * 1024**3)
+        reservations = [(broker.IMAGE_CONTENT, 3 * 1024**3), (broker.IMAGE_SNAPSHOTS, 3 * 1024**3)]
+        self.check(True, 5 * 1024**3, 5 * 1024**3, reservations)
         with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
-            self.check(True, 2 * 1024**3, 20 * 1024**3)
+            self.check(True, 4 * 1024**3, 5 * 1024**3, reservations)
         with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
-            self.check(True, 4 * 1024**3, 16 * 1024**3)
+            self.check(True, 5 * 1024**3, 4 * 1024**3, reservations)
+
+    def test_staging_reservation_and_invalid_sizes_fail_closed(self):
+        self.check(True, 0, 4 * 1024**3, [(broker.STAGING, broker.MAX_ARCHIVE)])
+        with self.assertRaisesRegex(broker.Refusal, "disk headroom"):
+            self.check(True, 0, 3 * 1024**3, [(broker.STAGING, broker.MAX_ARCHIVE)])
+        for size in (None, True, 0, -1, 9 * 1024**3):
+            with self.assertRaisesRegex(broker.Refusal, "invalid storage reservation"):
+                self.check(True, 100 * 1024**3, 100 * 1024**3, [(broker.STAGING, size)])
+
+    def test_primary_layout_checks_trusted_directories_without_secondary_mounts(self):
+        self.assertEqual(broker.STAGING, broker.STATE)
+        self.assertEqual(broker.IMAGE_CONTENT.as_posix(), "/var/lib/containerd/io.containerd.content.v1.content")
+        self.assertEqual(broker.IMAGE_SNAPSHOTS.as_posix(), "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs")
+        devices = {pathlib.Path("/"): 1, broker.STATE: 1,
+                   broker.IMAGE_SNAPSHOTS: 1, broker.IMAGE_CONTENT: 1}
+        def filesystem(path, **kwargs):
+            return SimpleNamespace(st_dev=devices[path])
+        with patch.object(broker, "trusted_path") as trust, patch.object(broker.os.path, "ismount", side_effect=AssertionError("mount requirement")), patch.object(pathlib.Path, "stat", autospec=True, side_effect=filesystem):
+            broker.require_storage_layout()
+            self.assertEqual([call.args[0] for call in trust.call_args_list],
+                             [broker.STATE, broker.STAGING, broker.IMAGE_CONTENT, broker.IMAGE_SNAPSHOTS])
+            for path in (broker.STATE, broker.IMAGE_CONTENT, broker.IMAGE_SNAPSHOTS):
+                devices[path] = 2
+                with self.assertRaisesRegex(broker.Refusal, "unexpected image preparation filesystem"):
+                    broker.require_storage_layout()
+                devices[path] = 1
+
+    def test_primary_layout_rejects_untrusted_paths(self):
+        with patch.object(pathlib.Path, "stat", return_value=SimpleNamespace(st_dev=1)), patch.object(broker, "trusted_path", side_effect=broker.Refusal("untrusted broker filesystem")):
+            with self.assertRaisesRegex(broker.Refusal, "untrusted"):
+                broker.require_storage_layout()
 
 
 class TrustTests(unittest.TestCase):
