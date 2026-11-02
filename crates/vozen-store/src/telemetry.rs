@@ -22,6 +22,7 @@ pub enum OperationalProvider {
     Gcloud,
     AzureTts,
     AzureTranslation,
+    Neural,
 }
 
 impl OperationalProvider {
@@ -34,6 +35,7 @@ impl OperationalProvider {
             Self::Gcloud => "gcloud",
             Self::AzureTts => "azure_tts",
             Self::AzureTranslation => "azure_translation",
+            Self::Neural => "neural",
         }
     }
 
@@ -46,6 +48,7 @@ impl OperationalProvider {
             "gcloud" => Ok(Self::Gcloud),
             "azure_tts" => Ok(Self::AzureTts),
             "azure_translation" => Ok(Self::AzureTranslation),
+            "neural" => Ok(Self::Neural),
             _ => Err(StoreError::InvalidOperationalTelemetry(value.to_owned())),
         }
     }
@@ -67,6 +70,25 @@ pub enum OperationalMetric {
     TranslationFailure,
     TranslationChars,
     ProviderChargedChars,
+    ReadDisabled,
+    ReadWrongCall,
+    ReadRoleMissing,
+    ReadOptedOut,
+    ReadBlocked,
+    ReadProfileMismatch,
+    ReadRateLimited,
+    ReadQueueBusy,
+    ReadSpamSuppressed,
+    ReadContentBlocked,
+    ReadSynthesisFailed,
+    ReadPlaybackFailed,
+    ReadStoreUnavailable,
+    TtsQueued,
+    PlaybackReady,
+    PlaybackStarted,
+    PlaybackCompleted,
+    PlaybackStopped,
+    PlaybackFailed,
 }
 
 impl OperationalMetric {
@@ -86,6 +108,25 @@ impl OperationalMetric {
             Self::TranslationFailure => "translation_failure",
             Self::TranslationChars => "translation_chars",
             Self::ProviderChargedChars => "provider_charged_chars",
+            Self::ReadDisabled => "read_disabled",
+            Self::ReadWrongCall => "read_wrong_call",
+            Self::ReadRoleMissing => "read_role_missing",
+            Self::ReadOptedOut => "read_opted_out",
+            Self::ReadBlocked => "read_blocked",
+            Self::ReadProfileMismatch => "read_profile_mismatch",
+            Self::ReadRateLimited => "read_rate_limited",
+            Self::ReadQueueBusy => "read_queue_busy",
+            Self::ReadSpamSuppressed => "read_spam_suppressed",
+            Self::ReadContentBlocked => "read_content_blocked",
+            Self::ReadSynthesisFailed => "read_synthesis_failed",
+            Self::ReadPlaybackFailed => "read_playback_failed",
+            Self::ReadStoreUnavailable => "read_store_unavailable",
+            Self::TtsQueued => "tts_queued",
+            Self::PlaybackReady => "playback_ready",
+            Self::PlaybackStarted => "playback_started",
+            Self::PlaybackCompleted => "playback_completed",
+            Self::PlaybackStopped => "playback_stopped",
+            Self::PlaybackFailed => "playback_failed",
         }
     }
 
@@ -105,6 +146,26 @@ impl OperationalMetric {
             "translation_failure" => Ok(Self::TranslationFailure),
             "translation_chars" => Ok(Self::TranslationChars),
             "provider_charged_chars" => Ok(Self::ProviderChargedChars),
+            "read_disabled" => Ok(Self::ReadDisabled),
+            "read_wrong_call" => Ok(Self::ReadWrongCall),
+            "read_role_missing" => Ok(Self::ReadRoleMissing),
+            "read_opted_out" => Ok(Self::ReadOptedOut),
+            "read_blocked" => Ok(Self::ReadBlocked),
+            "read_profile_mismatch" => Ok(Self::ReadProfileMismatch),
+            "read_rate_limited" => Ok(Self::ReadRateLimited),
+            "read_queue_busy" => Ok(Self::ReadQueueBusy),
+            "read_spam_suppressed" => Ok(Self::ReadSpamSuppressed),
+            "read_content_blocked" => Ok(Self::ReadContentBlocked),
+            "read_synthesis_failed" => Ok(Self::ReadSynthesisFailed),
+            "read_playback_failed" => Ok(Self::ReadPlaybackFailed),
+            "read_store_unavailable" => Ok(Self::ReadStoreUnavailable),
+            "tts_queued" => Ok(Self::TtsQueued),
+            "playback_ready" => Ok(Self::PlaybackReady),
+            "playback_started" => Ok(Self::PlaybackStarted),
+            "playback_completed" => Ok(Self::PlaybackCompleted),
+            "playback_stopped" => Ok(Self::PlaybackStopped),
+            "playback_failed" => Ok(Self::PlaybackFailed),
+
             _ => Err(StoreError::InvalidOperationalTelemetry(value.to_owned())),
         }
     }

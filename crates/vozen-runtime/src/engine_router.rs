@@ -66,9 +66,12 @@ impl PerUserCommandSynthesizer {
     async fn default_synthesis(
         &self,
         request: &SynthRequest,
-    ) -> Result<std::path::PathBuf, CommandSynthesisError> {
+    ) -> Result<
+        (std::path::PathBuf, vozen_store::OperationalProvider),
+        (CommandSynthesisError, vozen_store::OperationalProvider),
+    > {
         self.default
-            .synthesize(&with_engine(request, SynthesisEngine::Default))
+            .synthesize_measured(&with_engine(request, SynthesisEngine::Default))
             .await
     }
 
@@ -77,13 +80,19 @@ impl PerUserCommandSynthesizer {
         provider: Option<&Arc<dyn CommandSpeechSynthesizer>>,
         request: &SynthRequest,
         engine: SynthesisEngine,
-    ) -> Result<std::path::PathBuf, CommandSynthesisError> {
+    ) -> Result<
+        (std::path::PathBuf, vozen_store::OperationalProvider),
+        (CommandSynthesisError, vozen_store::OperationalProvider),
+    > {
         let Some(provider) = provider else {
             self.metrics.record_synth_fallback();
             eprintln!("[tts:router] {engine:?} provider is not configured; using Google fallback");
             return self.default_synthesis(request).await;
         };
-        match provider.synthesize(&with_engine(request, engine)).await {
+        match provider
+            .synthesize_measured(&with_engine(request, engine))
+            .await
+        {
             Ok(path) => Ok(path),
             Err(_) => {
                 self.metrics.record_synth_fallback();
@@ -100,11 +109,24 @@ impl CommandSpeechSynthesizer for PerUserCommandSynthesizer {
         &self,
         request: &SynthRequest,
     ) -> Result<std::path::PathBuf, CommandSynthesisError> {
+        self.synthesize_measured(request)
+            .await
+            .map(|(path, _)| path)
+            .map_err(|(error, _)| error)
+    }
+
+    async fn synthesize_measured(
+        &self,
+        request: &SynthRequest,
+    ) -> Result<
+        (std::path::PathBuf, vozen_store::OperationalProvider),
+        (CommandSynthesisError, vozen_store::OperationalProvider),
+    > {
         match request.engine {
             SynthesisEngine::Default => self.default_synthesis(request).await,
             SynthesisEngine::Piper if Arc::ptr_eq(&self.default, &self.piper) => {
                 self.piper
-                    .synthesize(&with_engine(request, SynthesisEngine::Piper))
+                    .synthesize_measured(&with_engine(request, SynthesisEngine::Piper))
                     .await
             }
             SynthesisEngine::Piper => {
@@ -146,10 +168,15 @@ mod tests {
     struct FakeSynthesizer {
         received: Mutex<Vec<SynthesisEngine>>,
         fails: AtomicBool,
+        provider: Option<vozen_store::OperationalProvider>,
     }
 
     #[async_trait]
     impl CommandSpeechSynthesizer for FakeSynthesizer {
+        fn provider(&self) -> vozen_store::OperationalProvider {
+            self.provider
+                .unwrap_or(vozen_store::OperationalProvider::Internal)
+        }
         async fn synthesize(
             &self,
             request: &SynthRequest,
@@ -197,6 +224,33 @@ mod tests {
             *default.received.lock().expect("received"),
             [SynthesisEngine::Default]
         );
+    }
+
+    #[tokio::test]
+    async fn measured_provider_follows_fallback_and_concurrent_requests() {
+        use vozen_store::OperationalProvider as Provider;
+        let default = Arc::new(FakeSynthesizer {
+            provider: Some(Provider::Gtts),
+            ..Default::default()
+        });
+        let piper = Arc::new(FakeSynthesizer {
+            provider: Some(Provider::Piper),
+            ..Default::default()
+        });
+        let failing = Arc::new(FakeSynthesizer {
+            provider: Some(Provider::Kokoro),
+            ..Default::default()
+        });
+        failing.fails.store(true, Ordering::Relaxed);
+        let router = PerUserCommandSynthesizer::new(default, piper, Some(failing), None, None);
+        let kokoro = request(SynthesisEngine::Kokoro);
+        let piper = request(SynthesisEngine::Piper);
+        let (fallback, direct) = tokio::join!(
+            router.synthesize_measured(&kokoro),
+            router.synthesize_measured(&piper)
+        );
+        assert_eq!(fallback.unwrap().1, Provider::Gtts);
+        assert_eq!(direct.unwrap().1, Provider::Piper);
     }
 
     #[tokio::test]

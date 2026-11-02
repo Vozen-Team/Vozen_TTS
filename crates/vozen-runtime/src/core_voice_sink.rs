@@ -1790,7 +1790,8 @@ impl CoreVoiceGatewaySink {
                 options.queue_cap,
                 self.gateway_state.message_counter(),
                 self.gateway_state.metrics(),
-            ),
+            )
+            .with_telemetry(self.store.clone(), self.runtime_batch.clone()),
             synthesis: GuildSynthesisCoordinator::default(),
         });
         *current = Some(dependencies.clone());
@@ -2705,6 +2706,76 @@ impl CoreVoiceGatewaySink {
                     CreateActionRow::Buttons(vec![reveal, cancel]),
                 ]),
         )
+    }
+
+    /// Called only after the setup session's current actor/guild/Manage Server checks.
+    pub(crate) async fn setup_audio_test(
+        &self,
+        context: &Context,
+        component: &serenity::model::application::ComponentInteraction,
+        member: &serenity::model::guild::Member,
+        reading_channel: ChannelId,
+    ) -> Result<String, GatewayEventDispatchError> {
+        let guild = component.guild_id.ok_or(GatewayEventDispatchError)?;
+        let facts = Self::randomizer_facts(
+            &guild.to_string(),
+            &reading_channel.to_string(),
+            &component.user.id.to_string(),
+            Some(member),
+        );
+        let author_voice = self
+            .gateway_state
+            .voice_channel_id(&facts.guild_id, &facts.user_id);
+        let bot_voice = self.gateway_state.bot_voice_channel_id(&facts.guild_id);
+        if author_voice.is_none()
+            || bot_voice
+                .as_ref()
+                .is_some_and(|id| Some(id) != author_voice.as_ref())
+        {
+            return Err(GatewayEventDispatchError);
+        }
+        let executor = self.executor(context)?;
+        let localizer = self.localizer.as_ref().ok_or(GatewayEventDispatchError)?;
+        if bot_voice.is_none()
+            && !matches!(
+                executor.join_for_setup(&facts).await,
+                CoreVoiceOutcome::Joined(JoinVoiceOutcome::Joined)
+            )
+        {
+            return executor
+                .render_key("error.generic", &facts, Some(&component.locale))
+                .map_err(|_| GatewayEventDispatchError);
+        }
+        let locale = self
+            .store
+            .lock()
+            .map_err(|_| GatewayEventDispatchError)?
+            .guild_config(&facts.guild_id)
+            .map_err(|_| GatewayEventDispatchError)?
+            .locale;
+        let phrase = localizer
+            .render_key("wizard.testPhrase", Some(&locale), None, &BTreeMap::new())
+            .ok_or(GatewayEventDispatchError)?;
+        let outcome = executor
+            .speak_text_with_voice(
+                &facts,
+                &phrase,
+                &self.options.settings.default_voice,
+                self.options.settings.default_speed,
+                self.options.settings.default_engine,
+                true,
+            )
+            .await;
+        let key = if matches!(outcome, CoreVoiceOutcome::Tts(CoreTtsOutcome::Queued)) {
+            "wizard.testQueued"
+        } else {
+            vozen_discord::core_voice_response(outcome)
+                .catalog_key()
+                .unwrap_or("error.generic")
+        };
+        localizer
+            .render_key(key, Some(&component.locale), None, &BTreeMap::new())
+            .ok_or(GatewayEventDispatchError)
     }
 
     async fn setup_reply(

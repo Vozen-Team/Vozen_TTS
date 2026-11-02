@@ -101,6 +101,10 @@ impl GcloudCommandSynthesizer {
 
 #[async_trait]
 impl CommandSpeechSynthesizer for GcloudCommandSynthesizer {
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Gcloud
+    }
+
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
         if !matches!(request.engine, SynthesisEngine::Gcloud) {
             return Err(CommandSynthesisError);

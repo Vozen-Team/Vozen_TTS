@@ -51,6 +51,10 @@ impl GttsCommandSynthesizer {
 
 #[async_trait]
 impl CommandSpeechSynthesizer for GttsCommandSynthesizer {
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Gtts
+    }
+
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
         if !matches!(request.engine, SynthesisEngine::Default) {
             return Err(CommandSynthesisError);
@@ -72,14 +76,27 @@ impl CommandSpeechSynthesizer for GttsCommandSynthesizer {
 #[async_trait]
 impl CommandSpeechSynthesizer for GttsWithPiperFallback {
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
-        match self.primary.synthesize(request).await {
+        self.synthesize_measured(request)
+            .await
+            .map(|(path, _)| path)
+            .map_err(|(error, _)| error)
+    }
+
+    async fn synthesize_measured(
+        &self,
+        request: &SynthRequest,
+    ) -> Result<
+        (PathBuf, vozen_store::OperationalProvider),
+        (CommandSynthesisError, vozen_store::OperationalProvider),
+    > {
+        match self.primary.synthesize_measured(request).await {
             Ok(path) => Ok(path),
             Err(_) => {
                 self.metrics.record_synth_fallback();
                 eprintln!("[tts:gtts] using Piper fallback");
                 let mut fallback_request = request.clone();
                 fallback_request.engine = SynthesisEngine::Piper;
-                self.fallback.synthesize(&fallback_request).await
+                self.fallback.synthesize_measured(&fallback_request).await
             }
         }
     }
@@ -132,6 +149,9 @@ mod tests {
         struct Successful;
         #[async_trait]
         impl CommandSpeechSynthesizer for Successful {
+            fn provider(&self) -> vozen_store::OperationalProvider {
+                vozen_store::OperationalProvider::Piper
+            }
             async fn synthesize(
                 &self,
                 request: &SynthRequest,
@@ -148,10 +168,16 @@ mod tests {
             metrics.clone(),
         );
         let output = fallback
-            .synthesize(&request(SynthesisEngine::Default))
+            .synthesize_measured(&request(SynthesisEngine::Default))
             .await
             .expect("fallback synthesis");
-        assert_eq!(output, PathBuf::from("piper.wav"));
+        assert_eq!(
+            output,
+            (
+                PathBuf::from("piper.wav"),
+                vozen_store::OperationalProvider::Piper
+            )
+        );
         assert_eq!(metrics.snapshot().synth_fallbacks, 1);
     }
 }

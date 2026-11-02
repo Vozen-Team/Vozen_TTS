@@ -66,7 +66,7 @@ pub use data_lifecycle::{
     USER_ERASE_SPECS, USER_ERASE_TABLES,
 };
 pub use gcloud_usage::{GcloudUsageScope, day_key_utc, month_key_utc};
-pub use growth_lifecycle::{GrowthDailyMetric, GrowthOverview};
+pub use growth_lifecycle::{GrowthDailyMetric, GrowthOverview, GrowthRetentionWindow};
 pub use guild_config::{GuildConfig, GuildConfigPatch};
 pub use guild_departed::DEPARTURE_GRACE_MS;
 pub use kofi_claim::{

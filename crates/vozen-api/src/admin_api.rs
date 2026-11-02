@@ -223,6 +223,15 @@ pub struct AdminGrowth {
     pub retained_w30: i64,
     #[serde(rename = "eligibleW30")]
     pub eligible_w30: i64,
+    /// Fixed windows selected by first-activation date, not return-event date.
+    #[serde(rename = "cohortRetention")]
+    pub cohort_retention: Vec<vozen_store::GrowthRetentionWindow>,
+    #[serde(rename = "retentionContract")]
+    pub retention_contract: &'static str,
+    #[serde(rename = "periodSetupRatio")]
+    pub period_setup_ratio: Option<f64>,
+    #[serde(rename = "periodActivationRatio")]
+    pub period_activation_ratio: Option<f64>,
     pub daily: Vec<AdminGrowthDaily>,
     #[serde(rename = "topgg", skip_serializing_if = "Option::is_none")]
     pub topgg: Option<AdminTopggSync>,
@@ -638,6 +647,12 @@ impl AdminApi {
             eligible_w7: overview.eligible_w7,
             retained_w30: overview.retained_w30,
             eligible_w30: overview.eligible_w30,
+            cohort_retention: store
+                .growth_retention_windows(from_day, to_day, now)
+                .map_err(|_| AdminGrantError::Store)?,
+            retention_contract: "Fixed UTC-day windows after queued TTS; legacy W7/W30 mean any return on or after 7/30 days. Historical coverage is partial. Period ratios are not cohort conversion.",
+            period_setup_ratio: (joins > 0).then(|| rate(setup_completed)),
+            period_activation_ratio: (joins > 0).then(|| rate(first_value)),
             daily: daily
                 .into_iter()
                 .map(|point| AdminGrowthDaily {
@@ -1016,6 +1031,11 @@ mod tests {
         assert_eq!(growth.votes, 1);
         assert_eq!(growth.daily.len(), 1);
         assert_eq!(growth.daily[0].votes, 1);
+        assert_eq!(growth.period_activation_ratio, None);
+        assert_eq!(growth.period_setup_ratio, None);
+        assert_eq!(growth.cohort_retention.len(), 4);
+        assert!(growth.cohort_retention.iter().all(|w| w.rate.is_none()));
+        assert!(growth.retention_contract.contains("queued TTS"));
     }
 
     #[test]
