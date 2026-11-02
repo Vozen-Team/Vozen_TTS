@@ -5,6 +5,7 @@
 //! rates; it never receives a guild ID from this module.
 
 use rusqlite::{OptionalExtension, params};
+use serde::Serialize;
 
 use crate::{SqliteStore, StoreError, utc_day_key_from_unix_millis};
 
@@ -69,6 +70,26 @@ pub struct GrowthDailyMetric {
     pub active: i64,
     pub votes: i64,
 }
+
+/// Fixed UTC-calendar windows, distinct from the legacy unbounded return counters.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthRetentionWindow {
+    pub start_day: i64,
+    pub end_day_exclusive: i64,
+    pub retained: i64,
+    pub eligible: i64,
+    pub rate: Option<f64>,
+    pub prospective_started_on: Option<String>,
+    pub historical_complete: bool,
+}
+
+const RETENTION_WINDOWS: [(i64, i64, &str); 4] = [
+    (7, 8, "retained_days7_7"),
+    (7, 14, "retained_days7_13"),
+    (30, 31, "retained_days30_30"),
+    (28, 35, "retained_days28_34"),
+];
 
 impl SqliteStore {
     /// Records a Guild Create event. A re-invite clears the departure timestamp while preserving
@@ -248,6 +269,7 @@ impl SqliteStore {
         if inserted != 0 {
             let source = lifecycle_source(&transaction, guild_id)?;
             add_daily(&transaction, now, &source, GrowthEvent::Active)?;
+            record_fixed_window_return(&transaction, guild_id, now)?;
         }
         record_due_retention(&transaction, guild_id, now)?;
         transaction.commit()?;
@@ -337,6 +359,73 @@ impl SqliteStore {
             .map_err(StoreError::from)
     }
 
+    /// Historical rows are explicitly partial. New cohorts use identity-free counters which
+    /// survive the normal guild purge; no deleted guild identity is restored or retained.
+    pub fn growth_retention_windows(
+        &self,
+        from_day: &str,
+        to_day: &str,
+        now: i64,
+    ) -> Result<Vec<GrowthRetentionWindow>, StoreError> {
+        validate_day(from_day)?;
+        validate_day(to_day)?;
+        if from_day > to_day {
+            return Err(StoreError::InvalidOperationalMetricDay(from_day.into()));
+        }
+        let connection = self.connection();
+        let started: Option<String> = connection.query_row(
+            "SELECT MIN(day) FROM growth_daily_metric
+             WHERE product = 'tts' AND event = 'retention_tracking_started'",
+            [],
+            |r| r.get(0),
+        )?;
+        RETENTION_WINDOWS
+            .iter()
+            .map(|&(start, end, event)| {
+                let (old_eligible, old_retained): (i64, i64) = connection.query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(EXISTS(
+                   SELECT 1 FROM guild_growth_activity_day a WHERE a.guild_id = l.guild_id
+                   AND a.day >= date(l.first_value_at / 1000, 'unixepoch', '+' || ?1 || ' days')
+                   AND a.day < date(l.first_value_at / 1000, 'unixepoch', '+' || ?2 || ' days')
+                 )), 0) FROM guild_growth_lifecycle l
+                 WHERE first_value_at IS NOT NULL AND install_source <> 'baseline'
+                   AND date(first_value_at / 1000, 'unixepoch') BETWEEN ?3 AND ?4
+                   AND date(first_value_at / 1000, 'unixepoch', '+' || ?2 || ' days') <= ?5
+                   AND (?6 IS NULL OR date(first_value_at / 1000, 'unixepoch') < ?6)",
+                    params![
+                        start,
+                        end,
+                        from_day,
+                        to_day,
+                        utc_day_key_from_unix_millis(now),
+                        started
+                    ],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let (new_eligible, new_retained): (i64, i64) = connection.query_row(
+                "SELECT COALESCE(SUM(CASE WHEN event = 'first_value' THEN value ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN event = ?1 THEN value ELSE 0 END), 0)
+                 FROM growth_daily_metric WHERE product = 'tts' AND source <> 'baseline'
+                   AND day BETWEEN ?2 AND ?3 AND day >= ?4
+                   AND date(day, '+' || ?5 || ' days') <= ?6",
+                params![event, from_day, to_day, started, end, utc_day_key_from_unix_millis(now)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+                let eligible = old_eligible + new_eligible;
+                let retained = old_retained + new_retained;
+                Ok(GrowthRetentionWindow {
+                    start_day: start,
+                    end_day_exclusive: end,
+                    retained,
+                    eligible,
+                    rate: (eligible > 0).then(|| retained as f64 / eligible as f64),
+                    prospective_started_on: started.clone(),
+                    historical_complete: started.as_deref().is_some_and(|day| from_day >= day),
+                })
+            })
+            .collect()
+    }
+
     pub fn list_growth_daily_metrics(
         &self,
         from_day: &str,
@@ -396,10 +485,73 @@ impl SqliteStore {
         if changed != 0 {
             let source = lifecycle_source(&transaction, guild_id)?;
             add_daily(&transaction, now, &source, event)?;
+            if event == GrowthEvent::FirstValue {
+                // Start on the next UTC day: earlier activations on upgrade day lack coverage.
+                transaction.execute(
+                    "INSERT INTO growth_daily_metric (day, product, source, event, value)
+                     SELECT ?1, 'tts', 'unknown', 'retention_tracking_started', 1
+                     WHERE NOT EXISTS (SELECT 1 FROM growth_daily_metric
+                       WHERE product = 'tts' AND event = 'retention_tracking_started')",
+                    [utc_day_key_from_unix_millis(now.saturating_add(DAY_MS))],
+                )?;
+            }
         }
         transaction.commit()?;
         Ok(())
     }
+}
+
+fn record_fixed_window_return(
+    transaction: &rusqlite::Transaction<'_>,
+    guild_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    let (first, source): (Option<i64>, String) = transaction.query_row(
+        "SELECT first_value_at, install_source FROM guild_growth_lifecycle WHERE guild_id = ?1",
+        [guild_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let Some(first) = first else {
+        return Ok(());
+    };
+    if source == BASELINE_SOURCE {
+        return Ok(());
+    }
+    let cohort_day = utc_day_key_from_unix_millis(first);
+    let started: Option<String> = transaction.query_row(
+        "SELECT MIN(day) FROM growth_daily_metric WHERE product = 'tts'
+         AND event = 'retention_tracking_started'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !started
+        .as_deref()
+        .is_some_and(|day| cohort_day.as_str() >= day)
+    {
+        return Ok(());
+    }
+    let age = now.div_euclid(DAY_MS) - first.div_euclid(DAY_MS);
+    for (start, end, event) in RETENTION_WINDOWS {
+        if !(start..end).contains(&age) {
+            continue;
+        }
+        let observations: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM guild_growth_activity_day WHERE guild_id = ?1
+             AND day >= date(?2, '+' || ?3 || ' days')
+             AND day < date(?2, '+' || ?4 || ' days')",
+            params![guild_id, cohort_day, start, end],
+            |r| r.get(0),
+        )?;
+        if observations == 1 {
+            transaction.execute(
+                "INSERT INTO growth_daily_metric (day, product, source, event, value)
+                 VALUES (?1, 'tts', ?2, ?3, 1)
+                 ON CONFLICT(day, product, source, event) DO UPDATE SET value = value + 1",
+                params![cohort_day, source, event],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Records an authenticated, provider-idempotent Top.gg delivery without retaining a user or
@@ -555,6 +707,76 @@ fn validate_day(day: &str) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn fixed_windows_exclude_late_returns_and_incomplete_days() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.record_guild_first_value("seed", 0).unwrap();
+        let first = 3 * DAY_MS - 1;
+        store.record_guild_first_value("returned", first).unwrap();
+        store.record_guild_first_value("late", first).unwrap();
+        store.record_guild_activity("returned", 9 * DAY_MS).unwrap();
+        store
+            .record_guild_activity("returned", 9 * DAY_MS + 1)
+            .unwrap();
+        store
+            .record_guild_activity("returned", 10 * DAY_MS)
+            .unwrap();
+        store.record_guild_activity("late", 16 * DAY_MS).unwrap();
+        let read = |now| {
+            store
+                .growth_retention_windows("1970-01-03", "1970-01-03", now)
+                .unwrap()
+        };
+        assert_eq!(read(15 * DAY_MS)[1].eligible, 0);
+        let week = &read(16 * DAY_MS)[1];
+        assert_eq!((week.eligible, week.retained), (2, 1));
+        assert_eq!(week.rate, Some(0.5));
+        assert!(week.historical_complete);
+        assert_eq!(read(16 * DAY_MS)[3].rate, None);
+        store.purge_guild_data("returned").unwrap();
+        store.purge_guild_data("late").unwrap();
+        let week = &read(16 * DAY_MS)[1];
+        assert_eq!((week.eligible, week.retained), (2, 1));
+    }
+
+    #[test]
+    fn historical_window_coverage_is_explicit_and_baseline_is_excluded() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO guild_growth_lifecycle
+             (guild_id, first_joined_at, last_joined_at, first_value_at, install_source)
+             VALUES ('old', 0, 0, 0, 'unknown'), ('baseline', 0, 0, 0, 'baseline')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO guild_growth_activity_day VALUES ('old', '1970-01-08')",
+                [],
+            )
+            .unwrap();
+        let windows = store
+            .growth_retention_windows("1970-01-01", "1970-01-01", 35 * DAY_MS)
+            .unwrap();
+        assert_eq!((windows[1].eligible, windows[1].retained), (1, 1));
+        assert!(!windows[1].historical_complete);
+        assert_eq!(windows[1].prospective_started_on, None);
+        assert_eq!(windows[3].rate, Some(0.0));
+        assert!(
+            store
+                .growth_retention_windows("bad", "1970-01-01", 0)
+                .is_err()
+        );
+        assert!(
+            store
+                .growth_retention_windows("1970-01-02", "1970-01-01", 0)
+                .is_err()
+        );
+    }
 
     #[test]
     fn oauth_and_gateway_count_one_attributed_join_in_either_order() {

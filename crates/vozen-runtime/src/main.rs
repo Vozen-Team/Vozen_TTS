@@ -1355,7 +1355,7 @@ fn core_voice_event_sink(
     voice_read_store: Arc<Mutex<SqliteStore>>,
     gateway_state: GatewayState,
     runtime_batch: RuntimeBatchBuffer,
-) -> Result<Option<Arc<dyn GatewayEventSink>>, RuntimeError> {
+) -> Result<Option<Arc<core_voice_sink::CoreVoiceGatewaySink>>, RuntimeError> {
     let Some(mut options) = options else {
         return Ok(None);
     };
@@ -2602,11 +2602,19 @@ async fn run() -> Result<(), RuntimeError> {
     // shadow process must never authorize the still-live Node process to reconnect calls.
     let write_rejoin_marker_on_shutdown = config.core_voice.is_some();
     let mut event_sinks: Vec<Arc<dyn GatewayEventSink>> = Vec::new();
+    let voice_sink = core_voice_event_sink(
+        config.core_voice,
+        store.clone(),
+        postgres_voice_read_store.unwrap_or_else(|| store.clone()),
+        gateway_state.clone(),
+        runtime_batch_buffer.clone(),
+    )?;
     if setup_enabled(env::var("RUST_SETUP_ENABLED").ok().as_deref()) {
-        event_sinks.push(Arc::new(
-            setup_wizard::SetupGatewaySink::new(store.clone(), gateway_state.clone())
-                .map_err(|_| RuntimeError::SetupGateway)?,
-        ));
+        let setup = setup_wizard::SetupGatewaySink::new(store.clone(), gateway_state.clone())
+            .map_err(|_| RuntimeError::SetupGateway)?;
+        #[cfg(feature = "voice-driver")]
+        let setup = setup.with_voice_sink(voice_sink.clone());
+        event_sinks.push(Arc::new(setup));
     }
     let consent_registry = SttConsentRegistry::default();
     // This sink only records departure markers and clears them on guild_create; it does not
@@ -2623,13 +2631,7 @@ async fn run() -> Result<(), RuntimeError> {
     if let Some(sink) = owner_command_event_sink(config.owner_commands, store.clone())? {
         event_sinks.push(sink);
     }
-    if let Some(sink) = core_voice_event_sink(
-        config.core_voice,
-        store.clone(),
-        postgres_voice_read_store.unwrap_or_else(|| store.clone()),
-        gateway_state.clone(),
-        runtime_batch_buffer.clone(),
-    )? {
+    if let Some(sink) = voice_sink {
         event_sinks.push(sink);
     }
     if let Some(sink) = autocomplete_event_sink(config.autocomplete, store.clone())? {

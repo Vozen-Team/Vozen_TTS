@@ -29,6 +29,10 @@ impl NeuralCommandSynthesizer {
 
 #[async_trait]
 impl CommandSpeechSynthesizer for NeuralCommandSynthesizer {
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Neural
+    }
+
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
         // Default is used by the per-user router for whichever provider the operator selected;
         // Neural is accepted as an explicit internal marker for tests and future routing.

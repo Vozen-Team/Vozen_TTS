@@ -196,6 +196,35 @@ where
     P: CommandVoicePlayback,
 {
     pub async fn execute(&self, invocation: MessageVoiceInvocation<'_>) -> MessageVoiceOutcome {
+        let outcome = self.execute_inner(invocation).await;
+        use vozen_core::MessageSpeechDenial as Denial;
+        let metric = match &outcome {
+            MessageVoiceOutcome::Denied(reason) => match reason {
+                Denial::Disabled => Some(OperationalMetric::ReadDisabled),
+                Denial::NotInSameVoice => Some(OperationalMetric::ReadWrongCall),
+                Denial::RequiredRoleMissing => Some(OperationalMetric::ReadRoleMissing),
+                Denial::PassiveOptOut => Some(OperationalMetric::ReadOptedOut),
+                Denial::Blocked => Some(OperationalMetric::ReadBlocked),
+                Denial::BoundVoiceMismatch => Some(OperationalMetric::ReadProfileMismatch),
+                Denial::NotTriggered | Denial::BotsDisabled => None,
+            },
+            MessageVoiceOutcome::RateLimited => Some(OperationalMetric::ReadRateLimited),
+            MessageVoiceOutcome::Busy => Some(OperationalMetric::ReadQueueBusy),
+            MessageVoiceOutcome::SpamSuppressed => Some(OperationalMetric::ReadSpamSuppressed),
+            MessageVoiceOutcome::FullyBlocked => Some(OperationalMetric::ReadContentBlocked),
+            MessageVoiceOutcome::SynthesisFailed => Some(OperationalMetric::ReadSynthesisFailed),
+            MessageVoiceOutcome::PlaybackFailed => Some(OperationalMetric::ReadPlaybackFailed),
+            MessageVoiceOutcome::StoreUnavailable => Some(OperationalMetric::ReadStoreUnavailable),
+            MessageVoiceOutcome::Queued { .. } => Some(OperationalMetric::TtsQueued),
+            MessageVoiceOutcome::Empty => None,
+        };
+        if let Some(metric) = metric {
+            self.record_metric(metric);
+        }
+        outcome
+    }
+
+    async fn execute_inner(&self, invocation: MessageVoiceInvocation<'_>) -> MessageVoiceOutcome {
         let received_at = Instant::now();
         let now_ms = (self.now_ms)();
         let mut voice_data = match self.voice_data.snapshot(
@@ -326,13 +355,27 @@ where
             return MessageVoiceOutcome::PlaybackFailed;
         }
         let synth_started = Instant::now();
-        let wav = match self.synthesizer.synthesize(&request).await {
-            Ok(wav) => {
-                self.record_synthesis_health(true);
+        let wav = match self.synthesizer.synthesize_measured(&request).await {
+            Ok((wav, provider)) => {
+                self.record_synthesis_health(true, provider);
+                let day = utc_day_key_from_unix_millis((self.now_ms)());
+                let duration = elapsed_ms(synth_started).min(i64::MAX as u64) as i64;
+                self.telemetry.record_metric(
+                    &day,
+                    OperationalMetric::SynthLatencyMs,
+                    provider,
+                    duration,
+                );
+                self.runtime_batch.record_metric(
+                    &day,
+                    OperationalMetric::SynthLatencyMs,
+                    provider,
+                    duration,
+                );
                 wav
             }
-            Err(_) => {
-                self.record_synthesis_health(false);
+            Err((_, provider)) => {
+                self.record_synthesis_health(false, provider);
                 let _ = self
                     .playback
                     .cancel_reservation(invocation.facts.guild_id, lane)
@@ -429,9 +472,9 @@ where
         let now = (self.now_ms)();
         let day = utc_day_key_from_unix_millis(now);
         self.runtime_batch
-            .record_metric(&day, metric, OperationalProvider::Piper, 1);
+            .record_metric(&day, metric, OperationalProvider::Internal, 1);
         self.telemetry
-            .record_metric(&day, metric, OperationalProvider::Piper, 1);
+            .record_metric(&day, metric, OperationalProvider::Internal, 1);
     }
 
     fn is_spam(&self, guild_id: &str, user_id: &str, cleaned: &str, now_ms: i64) -> bool {
@@ -454,7 +497,7 @@ where
             .is_some_and(|mut gate| gate.should_count(guild_id, user_id, cleaned, now_ms))
     }
 
-    fn record_synthesis_health(&self, success: bool) {
+    fn record_synthesis_health(&self, success: bool, provider: OperationalProvider) {
         let now = (self.now_ms)();
         let day = utc_day_key_from_unix_millis(now);
         let metric = if success {
@@ -462,17 +505,14 @@ where
         } else {
             OperationalMetric::SynthFailure
         };
-        self.runtime_batch
-            .record_metric(&day, metric, OperationalProvider::Piper, 1);
+        self.runtime_batch.record_metric(&day, metric, provider, 1);
         let health = if success {
             ProviderHealth::Healthy
         } else {
             ProviderHealth::Degraded
         };
-        self.telemetry
-            .record_metric(&day, metric, OperationalProvider::Piper, 1);
-        self.telemetry
-            .record_provider_health(OperationalProvider::Piper, health, now);
+        self.telemetry.record_metric(&day, metric, provider, 1);
+        self.telemetry.record_provider_health(provider, health, now);
     }
 
     /// Mirrors the Node rule: usage changes only after playback accepted the rendered request.
@@ -549,6 +589,9 @@ mod tests {
 
     #[async_trait]
     impl CommandSpeechSynthesizer for FakeSynthesizer {
+        fn provider(&self) -> OperationalProvider {
+            OperationalProvider::Piper
+        }
         async fn synthesize(
             &self,
             _request: &SynthRequest,
@@ -748,7 +791,7 @@ mod tests {
                 .iter()
                 .any(|row| {
                     row.metric == OperationalMetric::QueueDrop
-                        && row.provider == OperationalProvider::Piper
+                        && row.provider == OperationalProvider::Internal
                         && row.value == 1
                 })
         );

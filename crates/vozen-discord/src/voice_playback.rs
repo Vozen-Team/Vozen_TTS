@@ -73,12 +73,49 @@ struct PlaybackLifecycleLogger {
     stage: &'static str,
     metrics: Arc<RuntimeMetrics>,
     created_at_ms: u64,
+    telemetry: Option<(
+        crate::speech_telemetry::SpeechTelemetryWriter,
+        vozen_store::RuntimeBatchBuffer,
+    )>,
+    started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "voice-driver")]
 #[async_trait]
 impl EventHandler for PlaybackLifecycleLogger {
     async fn act(&self, context: &EventContext<'_>) -> Option<Event> {
+        let observed = if let EventContext::Track(tracks) = context {
+            tracks.first()
+        } else {
+            None
+        };
+        if let Some((state, _)) = observed {
+            use vozen_store::OperationalMetric as Metric;
+            let (metric, progress) =
+                playback_observation(self.stage, &state.playing, state.position);
+            if progress
+                && !self
+                    .started
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                self.record(Metric::PlaybackStarted);
+                if self.created_at_ms > 0 {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
+                        .unwrap_or(self.created_at_ms);
+                    let ttfa_ms = now_ms.saturating_sub(self.created_at_ms);
+                    self.metrics.record_ttfa_ms(ttfa_ms);
+                    self.record_value(Metric::TtfaMs, ttfa_ms.min(i64::MAX as u64) as i64);
+                }
+            }
+            if let Some(metric) = metric {
+                self.record(metric);
+            }
+            if self.stage == "progress" {
+                return (progress || state.playing.is_done()).then_some(Event::Cancel);
+            }
+        }
         if let EventContext::Track(tracks) = context
             && let Some((state, _)) = tracks.first()
         {
@@ -92,19 +129,52 @@ impl EventHandler for PlaybackLifecycleLogger {
         } else {
             eprintln!("[voice:playback] track {}", self.stage);
         }
-        if self.stage == "playable" && self.created_at_ms > 0 {
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
-                .unwrap_or(self.created_at_ms);
-            let ttfa_ms = now_ms.saturating_sub(self.created_at_ms);
-            self.metrics.record_ttfa_ms(ttfa_ms);
-            if ttfa_ms >= 1_000 {
-                eprintln!("[voice:latency] slow ttfa_ms={ttfa_ms}");
-            }
-        }
         Some(Event::Cancel)
     }
+}
+
+#[cfg(feature = "voice-driver")]
+impl PlaybackLifecycleLogger {
+    fn record(&self, metric: vozen_store::OperationalMetric) {
+        self.record_value(metric, 1);
+    }
+
+    fn record_value(&self, metric: vozen_store::OperationalMetric, value: i64) {
+        if let Some((writer, batch)) = &self.telemetry {
+            let day = vozen_store::utc_day_key();
+            writer.record_metric(
+                &day,
+                metric,
+                vozen_store::OperationalProvider::Internal,
+                value,
+            );
+            batch.record_metric(
+                &day,
+                metric,
+                vozen_store::OperationalProvider::Internal,
+                value,
+            );
+        }
+    }
+}
+
+#[cfg(feature = "voice-driver")]
+fn playback_observation(
+    stage: &str,
+    mode: &songbird::tracks::PlayMode,
+    position: std::time::Duration,
+) -> (Option<vozen_store::OperationalMetric>, bool) {
+    use songbird::tracks::PlayMode;
+    use vozen_store::OperationalMetric as Metric;
+    let progressed = !position.is_zero() && matches!(mode, PlayMode::Play | PlayMode::End);
+    let metric = match stage {
+        "playable" => Some(Metric::PlaybackReady),
+        "error" => Some(Metric::PlaybackFailed),
+        "ended" if matches!(mode, PlayMode::End) => Some(Metric::PlaybackCompleted),
+        "ended" if matches!(mode, PlayMode::Stop) => Some(Metric::PlaybackStopped),
+        _ => None,
+    };
+    (metric, progressed)
 }
 
 /// Bounded metadata mirror of Songbird's queue. Songbird is the playback authority; this only
@@ -283,6 +353,11 @@ impl QueueReservations {
 #[derive(Clone)]
 pub struct SongbirdCommandPlayback {
     #[cfg(feature = "voice-driver")]
+    telemetry: Option<(
+        crate::speech_telemetry::SpeechTelemetryWriter,
+        vozen_store::RuntimeBatchBuffer,
+    )>,
+    #[cfg(feature = "voice-driver")]
     context: serenity::client::Context,
     #[cfg(feature = "voice-driver")]
     maximum_queue_items: usize,
@@ -322,6 +397,8 @@ impl SongbirdCommandPlayback {
 
         Self {
             #[cfg(feature = "voice-driver")]
+            telemetry: None,
+            #[cfg(feature = "voice-driver")]
             context,
             #[cfg(feature = "voice-driver")]
             // A zero-sized queue would make every request look like a configuration success and
@@ -336,6 +413,19 @@ impl SongbirdCommandPlayback {
             #[cfg(feature = "voice-driver")]
             metrics,
         }
+    }
+
+    #[cfg(feature = "voice-driver")]
+    pub fn with_telemetry(
+        mut self,
+        store: Arc<std::sync::Mutex<vozen_store::SqliteStore>>,
+        batch: vozen_store::RuntimeBatchBuffer,
+    ) -> Self {
+        self.telemetry = Some((
+            crate::speech_telemetry::SpeechTelemetryWriter::new(store),
+            batch,
+        ));
+        self
     }
 
     #[cfg(feature = "voice-driver")]
@@ -446,18 +536,25 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
             ),
             std::time::Duration::ZERO,
         );
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for (event, stage) in [
-            (TrackEvent::Playable, "playable"),
-            (TrackEvent::Error, "error"),
-            (TrackEvent::End, "ended"),
+            (Event::Track(TrackEvent::Playable), "playable"),
+            (Event::Track(TrackEvent::Error), "error"),
+            (Event::Track(TrackEvent::End), "ended"),
+            (
+                Event::Periodic(std::time::Duration::from_millis(100), None),
+                "progress",
+            ),
         ] {
             track.events.add_event(
                 EventData::new(
-                    Event::Track(event),
+                    event,
                     PlaybackLifecycleLogger {
                         stage,
                         metrics: self.metrics.clone(),
                         created_at_ms: options.created_at_ms,
+                        telemetry: self.telemetry.clone(),
+                        started: started.clone(),
                     },
                 ),
                 std::time::Duration::ZERO,
@@ -818,6 +915,31 @@ pub async fn leave_voice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "voice-driver")]
+    #[test]
+    fn ready_audio_is_not_progress_and_stopped_audio_is_not_completion() {
+        use songbird::tracks::PlayMode;
+        use vozen_store::OperationalMetric as Metric;
+        let zero = std::time::Duration::ZERO;
+        let heard = std::time::Duration::from_millis(20);
+        assert_eq!(
+            playback_observation("playable", &PlayMode::Pause, zero),
+            (Some(Metric::PlaybackReady), false)
+        );
+        assert_eq!(
+            playback_observation("progress", &PlayMode::Play, heard),
+            (None, true)
+        );
+        assert_eq!(
+            playback_observation("ended", &PlayMode::Stop, heard),
+            (Some(Metric::PlaybackStopped), false)
+        );
+        assert_eq!(
+            playback_observation("ended", &PlayMode::End, heard),
+            (Some(Metric::PlaybackCompleted), true)
+        );
+    }
 
     #[test]
     fn portable_builds_never_claim_to_have_a_voice_driver() {

@@ -222,6 +222,8 @@ mod songbird_adapter {
         }
     }
 
+    pub use SongbirdVoiceReceiver as PublicSongbirdVoiceReceiver;
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -308,8 +310,6 @@ mod songbird_adapter {
             ));
         }
     }
-
-    pub use SongbirdVoiceReceiver as PublicSongbirdVoiceReceiver;
 }
 
 #[cfg(feature = "voice-driver")]

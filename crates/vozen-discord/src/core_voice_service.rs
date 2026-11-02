@@ -49,6 +49,25 @@ pub trait CommandSpeechSynthesizer: Send + Sync {
         &self,
         request: &SynthRequest,
     ) -> Result<std::path::PathBuf, CommandSynthesisError>;
+
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Internal
+    }
+
+    /// Provider is returned with this result, so concurrent requests and fallbacks cannot
+    /// overwrite another request's attribution. Unknown adapters remain explicitly internal.
+    async fn synthesize_measured(
+        &self,
+        request: &SynthRequest,
+    ) -> Result<
+        (std::path::PathBuf, vozen_store::OperationalProvider),
+        (CommandSynthesisError, vozen_store::OperationalProvider),
+    > {
+        self.synthesize(request)
+            .await
+            .map(|path| (path, self.provider()))
+            .map_err(|error| (error, self.provider()))
+    }
 }
 
 /// Reserves capacity before synthesis and later accepts the immutable WAV in the guild FIFO.

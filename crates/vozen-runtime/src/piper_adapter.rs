@@ -78,6 +78,10 @@ impl<R> CommandSpeechSynthesizer for PiperCommandSynthesizer<R>
 where
     R: PiperRunner + 'static,
 {
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Piper
+    }
+
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
         // A Rust canary that only installed Piper must never acknowledge a paid/provider-specific
         // preference and then synthesize it with Piper. The future router owns these routes.

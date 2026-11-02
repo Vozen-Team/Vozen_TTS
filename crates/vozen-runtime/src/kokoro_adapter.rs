@@ -32,6 +32,10 @@ impl KokoroCommandSynthesizer {
 
 #[async_trait]
 impl CommandSpeechSynthesizer for KokoroCommandSynthesizer {
+    fn provider(&self) -> vozen_store::OperationalProvider {
+        vozen_store::OperationalProvider::Kokoro
+    }
+
     async fn synthesize(&self, request: &SynthRequest) -> Result<PathBuf, CommandSynthesisError> {
         if !matches!(request.engine, SynthesisEngine::Kokoro) {
             return Err(CommandSynthesisError);
