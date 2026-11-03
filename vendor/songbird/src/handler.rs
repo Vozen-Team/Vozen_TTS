@@ -45,6 +45,8 @@ pub struct Call {
     #[cfg(feature = "driver")]
     /// The internal controller of the voice connection monitor thread.
     driver: Driver,
+    #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+    stop_queue_on_voice_change: bool,
 
     guild_id: GuildId,
     /// Whether the current handler is set to deafen voice connections.
@@ -123,6 +125,8 @@ impl Call {
             connection: None,
             #[cfg(feature = "driver")]
             driver: Driver::new(config),
+            #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+            stop_queue_on_voice_change: false,
             guild_id,
             self_deaf: false,
             self_mute: false,
@@ -176,6 +180,19 @@ impl Call {
         self.self_deaf
     }
 
+    /// Stops built-in queue tracks before the call leaves or changes channel.
+    #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+    pub fn set_stop_queue_on_voice_change(&mut self, stop: bool) {
+        self.stop_queue_on_voice_change = stop;
+    }
+
+    #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+    fn stop_queue_before_voice_change(&self) {
+        if self.stop_queue_on_voice_change {
+            self.driver.queue().stop();
+        }
+    }
+
     async fn should_actually_join<F, G>(
         &mut self,
         completion_generator: F,
@@ -194,6 +211,8 @@ impl Call {
                 false
             } else {
                 // not in progress, and/or a channel change.
+                #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+                self.stop_queue_before_voice_change();
                 true
             }
         } else {
@@ -352,6 +371,8 @@ impl Call {
     }
 
     fn leave_local(&mut self) {
+        #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+        self.stop_queue_before_voice_change();
         self.connection = None;
 
         #[cfg(feature = "driver")]
@@ -419,6 +440,13 @@ impl Call {
 
     fn update_state_inner(&mut self, session_id: String, channel_id: Option<ChannelId>) {
         if let Some(channel_id) = channel_id {
+            #[cfg(all(feature = "driver", feature = "builtin-queue"))]
+            if self
+                .current_channel()
+                .is_some_and(|current| current != channel_id)
+            {
+                self.stop_queue_before_voice_change();
+            }
             let try_conn = if let Some((ref mut progress, _)) = self.connection.as_mut() {
                 progress.apply_state_update(session_id, channel_id)
             } else {
@@ -486,5 +514,43 @@ impl Deref for Call {
 impl DerefMut for Call {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.driver
+    }
+}
+
+#[cfg(all(test, feature = "driver", feature = "builtin-queue"))]
+mod voice_queue_tests {
+    use super::*;
+    use crate::{input::RawAdapter, tracks::Track};
+    use std::{io::Cursor, num::NonZeroU64};
+
+    fn silence() -> Track {
+        Track::new(RawAdapter::new(Cursor::new(vec![0u8; 192_000]), 48_000, 1).into())
+    }
+
+    #[tokio::test]
+    async fn bound_queue_stops_on_gateway_move_and_disconnect() {
+        let id = NonZeroU64::new(1).unwrap();
+        let other = NonZeroU64::new(2).unwrap();
+        let mut call = Call::standalone(id, id);
+        call.set_stop_queue_on_voice_change(true);
+        let (info, received) = flume::unbounded();
+        call.connection = Some((
+            ConnectionProgress::new(id.into(), id.into(), id.into()),
+            Return::Info(info),
+        ));
+        call.update_server(String::new(), String::new());
+        call.update_state("session".into(), Some(id));
+        assert_eq!(received.try_recv().unwrap().channel_id, id.into());
+        call.driver.enqueue_with_preload(silence(), None);
+        call.update_state("session".into(), Some(id));
+        assert_eq!(call.driver.queue().len(), 1);
+
+        call.update_state("session".into(), Some(other));
+        assert_eq!(call.current_channel(), Some(other.into()));
+        assert!(call.driver.queue().is_empty());
+        call.driver.enqueue_with_preload(silence(), None);
+        call.update_state("session".into(), None::<NonZeroU64>);
+        assert!(call.current_channel().is_none());
+        assert!(call.driver.queue().is_empty());
     }
 }

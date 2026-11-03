@@ -31,6 +31,17 @@ pub trait VoiceSessionTransport: Send + Sync {
         guild_id: &str,
         channel_id: &str,
     ) -> Result<(), VoiceSessionTransportError>;
+    async fn join_if_idle(
+        &self,
+        guild_id: &str,
+        channel_id: &str,
+        still_authorized: &(dyn Fn() -> bool + Sync),
+    ) -> Result<(), VoiceSessionTransportError> {
+        if !still_authorized() {
+            return Err(VoiceSessionTransportError::PermissionDenied);
+        }
+        self.join(guild_id, channel_id).await
+    }
     async fn leave(&self, guild_id: &str) -> Result<(), VoiceSessionTransportError>;
 }
 
@@ -79,16 +90,50 @@ impl<T: VoiceSessionTransport> VoiceSessionService<T> {
         let Some(channel_id) = self.gateway_state.voice_channel_id(guild_id, user_id) else {
             return JoinVoiceOutcome::NoUserVoiceChannel;
         };
-        match self.transport.join(guild_id, &channel_id).await {
+        let joined = self.transport.join(guild_id, &channel_id).await;
+        self.finish_join(guild_id, &channel_id, now_ms, joined)
+    }
+
+    /// Joins only the channel the message's autojoin policy and permission check approved.
+    pub async fn join_for_message(
+        &self,
+        guild_id: &str,
+        user_id: &str,
+        expected_channel: &str,
+        now_ms: i64,
+    ) -> JoinVoiceOutcome {
+        let still_authorized = || {
+            self.gateway_state.bot_voice_channel_id(guild_id).is_none()
+                && self
+                    .gateway_state
+                    .voice_channel_id(guild_id, user_id)
+                    .as_deref()
+                    == Some(expected_channel)
+        };
+        let joined = self
+            .transport
+            .join_if_idle(guild_id, expected_channel, &still_authorized)
+            .await;
+        self.finish_join(guild_id, expected_channel, now_ms, joined)
+    }
+
+    fn finish_join(
+        &self,
+        guild_id: &str,
+        channel_id: &str,
+        now_ms: i64,
+        joined: Result<(), VoiceSessionTransportError>,
+    ) -> JoinVoiceOutcome {
+        match joined {
             Ok(()) => {
                 // The voice gateway update is asynchronous. Publish the local fact now so an
                 // immediately following message cannot bypass the same-call policy while the
                 // durable rejoin marker is being written.
                 self.gateway_state
-                    .set_bot_voice_channel(guild_id, Some(channel_id.clone()));
+                    .set_bot_voice_channel(guild_id, Some(channel_id.to_owned()));
                 match self.store.lock() {
                     Ok(store) => {
-                        match store.remember_voice_presence(guild_id, &channel_id, now_ms) {
+                        match store.remember_voice_presence(guild_id, channel_id, now_ms) {
                             Ok(()) => JoinVoiceOutcome::Joined,
                             Err(_) => JoinVoiceOutcome::StoreUnavailable,
                         }
@@ -128,6 +173,7 @@ impl<T: VoiceSessionTransport> VoiceSessionService<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use tokio::sync::Notify;
 
     use super::*;
 
@@ -137,6 +183,7 @@ mod tests {
         leaves: Mutex<Vec<String>>,
         join_error: Option<VoiceSessionTransportError>,
         leave_error: Option<VoiceSessionTransportError>,
+        authorization_gate: Option<(Notify, Notify)>,
     }
 
     #[async_trait]
@@ -151,6 +198,22 @@ mod tests {
                 .expect("joins")
                 .push((guild_id.into(), channel_id.into()));
             self.join_error.map_or(Ok(()), Err)
+        }
+
+        async fn join_if_idle(
+            &self,
+            guild_id: &str,
+            channel_id: &str,
+            still_authorized: &(dyn Fn() -> bool + Sync),
+        ) -> Result<(), VoiceSessionTransportError> {
+            if let Some((started, release)) = &self.authorization_gate {
+                started.notify_one();
+                release.notified().await;
+            }
+            if !still_authorized() {
+                return Err(VoiceSessionTransportError::PermissionDenied);
+            }
+            self.join(guild_id, channel_id).await
         }
 
         async fn leave(&self, guild_id: &str) -> Result<(), VoiceSessionTransportError> {
@@ -173,6 +236,58 @@ mod tests {
             store,
             state,
         )
+    }
+
+    #[tokio::test]
+    async fn autojoin_rejects_a_channel_changed_while_waiting_for_transport() {
+        let (service, store, state) = make_service(FakeTransport {
+            authorization_gate: Some((Notify::new(), Notify::new())),
+            ..FakeTransport::default()
+        });
+        state.remember_bot_user("bot".into());
+        state.update_voice_state("guild", "user", Some("voice".into()));
+        let (started, release) = service.transport.authorization_gate.as_ref().expect("gate");
+        let join = service.join_for_message("guild", "user", "voice", 42);
+        tokio::pin!(join);
+        tokio::select! {
+            _ = started.notified() => {}
+            result = &mut join => panic!("autojoin finished before the state change: {result:?}"),
+        }
+        state.update_voice_state("guild", "user", Some("other".into()));
+        release.notify_one();
+        assert_eq!(join.await, JoinVoiceOutcome::PermissionDenied);
+        assert!(service.transport.joins.lock().expect("joins").is_empty());
+        assert!(
+            store
+                .lock()
+                .expect("store")
+                .voice_presences()
+                .expect("presence")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn autojoin_only_joins_the_approved_channel_when_the_bot_is_idle() {
+        let (service, _, state) = make_service(FakeTransport::default());
+        state.remember_bot_user("bot".into());
+        state.update_voice_state("guild", "user", Some("voice".into()));
+        state.set_bot_voice_channel("guild", Some("already-connected".into()));
+        assert_eq!(
+            service.join_for_message("guild", "user", "voice", 42).await,
+            JoinVoiceOutcome::PermissionDenied
+        );
+        assert!(service.transport.joins.lock().expect("joins").is_empty());
+
+        state.set_bot_voice_channel("guild", None);
+        assert_eq!(
+            service.join_for_message("guild", "user", "voice", 43).await,
+            JoinVoiceOutcome::Joined
+        );
+        assert_eq!(
+            *service.transport.joins.lock().expect("joins"),
+            vec![("guild".to_owned(), "voice".to_owned())]
+        );
     }
 
     #[tokio::test]

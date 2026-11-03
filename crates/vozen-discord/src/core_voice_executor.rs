@@ -277,10 +277,20 @@ where
             .await
     }
 
-    /// Joins the author's current voice channel for the one message that triggered an enabled
-    /// auto-join policy. It shares the exact `/join` transport and durable-presence ordering.
-    pub async fn join_for_message(&self, facts: &CoreVoiceInteractionFacts) -> CoreVoiceOutcome {
-        self.join_for_setup(facts).await
+    /// Joins the exact channel authorized for this autojoin message.
+    pub async fn join_for_message(
+        &self,
+        facts: &CoreVoiceInteractionFacts,
+        expected_channel: &str,
+    ) -> CoreVoiceOutcome {
+        CoreVoiceOutcome::Joined(
+            self.service
+                .join_for_message(
+                    facts.invocation(&|_| "someone".to_owned(), &|_| "a channel".to_owned()),
+                    expected_channel,
+                )
+                .await,
+        )
     }
 
     /// Leaves a call from a gateway lifecycle rule using the same durable cleanup as `/leave`.
@@ -474,6 +484,7 @@ mod tests {
         async fn enqueue_reserved(
             &self,
             _: &str,
+            _: &crate::VoiceDestination,
             _: &Path,
             _: QueueEnqueueOptions<'_>,
         ) -> Result<(), CommandPlaybackError> {

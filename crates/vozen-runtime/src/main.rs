@@ -1355,6 +1355,7 @@ fn core_voice_event_sink(
     voice_read_store: Arc<Mutex<SqliteStore>>,
     gateway_state: GatewayState,
     runtime_batch: RuntimeBatchBuffer,
+    planned_rejoin_marker: Option<PathBuf>,
 ) -> Result<Option<Arc<core_voice_sink::CoreVoiceGatewaySink>>, RuntimeError> {
     let Some(mut options) = options else {
         return Ok(None);
@@ -1374,6 +1375,7 @@ fn core_voice_event_sink(
             gateway_state,
             options,
             runtime_batch,
+            planned_rejoin_marker,
         ),
     )))
 }
@@ -1937,6 +1939,7 @@ fn core_voice_event_sink(
     _voice_read_store: Arc<Mutex<SqliteStore>>,
     _gateway_state: GatewayState,
     _runtime_batch: RuntimeBatchBuffer,
+    _planned_rejoin_marker: Option<PathBuf>,
 ) -> Result<Option<Arc<dyn GatewayEventSink>>, RuntimeError> {
     if options.is_some() {
         return Err(RuntimeError::VoiceDriverRequired);
@@ -2598,9 +2601,12 @@ async fn run() -> Result<(), RuntimeError> {
         }
         None
     };
-    // Only a runtime that owns Rust voice sessions may write the shared restart marker. A
-    // shadow process must never authorize the still-live Node process to reconnect calls.
+    // Only a runtime that owns Rust voice sessions may authorize planned rejoin.
     let write_rejoin_marker_on_shutdown = config.core_voice.is_some();
+    let planned_rejoin_marker = config
+        .core_voice
+        .as_ref()
+        .and_then(|_| planned_rejoin_marker_path(&config.database_path));
     let mut event_sinks: Vec<Arc<dyn GatewayEventSink>> = Vec::new();
     let voice_sink = core_voice_event_sink(
         config.core_voice,
@@ -2608,6 +2614,7 @@ async fn run() -> Result<(), RuntimeError> {
         postgres_voice_read_store.unwrap_or_else(|| store.clone()),
         gateway_state.clone(),
         runtime_batch_buffer.clone(),
+        planned_rejoin_marker.clone(),
     )?;
     if setup_enabled(env::var("RUST_SETUP_ENABLED").ok().as_deref()) {
         let setup = setup_wizard::SetupGatewaySink::new(store.clone(), gateway_state.clone())
@@ -2802,7 +2809,7 @@ async fn run() -> Result<(), RuntimeError> {
             tokio::select! {
                 result = gateway => return result.map_err(RuntimeError::from),
                 _ = wait_for_clean_shutdown_signal() => {
-                    write_current_rejoin_marker(&gateway_state);
+                    write_current_rejoin_marker(&gateway_state, planned_rejoin_marker.as_deref());
                     return Ok(());
                 }
             }
@@ -2830,7 +2837,7 @@ async fn run() -> Result<(), RuntimeError> {
             result = gateway => result.map_err(RuntimeError::from),
             result = axum::serve(listener, app) => result.map_err(RuntimeError::from),
             _ = wait_for_clean_shutdown_signal() => {
-                write_current_rejoin_marker(&gateway_state);
+                write_current_rejoin_marker(&gateway_state, planned_rejoin_marker.as_deref());
                 Ok(())
             }
         }
@@ -2941,15 +2948,34 @@ async fn wait_for_clean_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-fn write_current_rejoin_marker(gateway_state: &GatewayState) {
-    let directory = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let _ = write_planned_rejoin_marker(
-        gateway_state
-            .bot_voice_sessions()
-            .into_iter()
-            .map(|(guild_id, _)| guild_id),
-        &directory,
-    );
+fn planned_rejoin_marker_path(database_path: &Path) -> Option<PathBuf> {
+    // Resolve after SQLite has opened the database so both restart paths use its persistent home.
+    let database_path = fs::canonicalize(database_path).ok()?;
+    Some(
+        database_path
+            .parent()?
+            .join(".vozen-rejoin-after-deploy.d")
+            .join(database_path.file_name()?),
+    )
+}
+
+fn write_current_rejoin_marker(gateway_state: &GatewayState, path: Option<&Path>) {
+    let sessions = gateway_state.bot_voice_sessions();
+    if sessions.is_empty() {
+        return;
+    }
+    let Some(path) = path else {
+        eprintln!("[voice] planned rejoin marker path unavailable");
+        return;
+    };
+    if let Err(error) =
+        write_planned_rejoin_marker(sessions.into_iter().map(|(guild_id, _)| guild_id), path)
+    {
+        eprintln!(
+            "[voice] could not write planned rejoin marker: {}",
+            error.kind()
+        );
+    }
 }
 
 struct HttpRouterRuntimeOptions {
@@ -3630,6 +3656,43 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[test]
+    fn planned_rejoin_marker_follows_the_database_across_work_directories() {
+        let root = env::temp_dir().join(format!("vozen-rejoin-path-{}", uuid::Uuid::new_v4()));
+        let original_workdir = root.join("original-app");
+        let replacement_workdir = root.join("replacement-app");
+        let data = root.join("data");
+        for directory in [&original_workdir, &replacement_workdir, &data] {
+            fs::create_dir_all(directory).expect("create fixture directory");
+        }
+        let relative_db = Path::new("../data/tts.db");
+        let original_db = original_workdir.join(relative_db);
+        drop(SqliteStore::open(&original_db).expect("open fixture database"));
+        let other_db = data.join("other.db");
+        drop(SqliteStore::open(&other_db).expect("open unrelated fixture database"));
+        let marker = planned_rejoin_marker_path(&original_db).expect("shutdown marker path");
+        assert!(marker.starts_with(fs::canonicalize(&data).expect("persistent directory")));
+        write_planned_rejoin_marker(["guild-a".into()], &marker).expect("write planned marker");
+
+        let legacy = replacement_workdir.join(vozen_discord::PLANNED_REJOIN_MARKER);
+        fs::write(&legacy, b"").expect("write legacy marker in replacement working directory");
+        let other = planned_rejoin_marker_path(&other_db).expect("unrelated marker path");
+        let replacement = planned_rejoin_marker_path(&replacement_workdir.join(relative_db))
+            .expect("startup marker path");
+        assert_eq!(replacement, marker);
+        let consume = |path| vozen_discord::consume_planned_rejoin_marker(path, SystemTime::now());
+        assert_eq!(consume(&other), None);
+        assert_eq!(
+            consume(&replacement),
+            Some(vozen_discord::PlannedRejoinScope::Guilds(
+                ["guild-a".into()].into_iter().collect()
+            ))
+        );
+        assert_eq!(consume(&replacement), None);
+        assert!(legacy.is_file());
+        fs::remove_dir_all(root).expect("remove fixture directory");
+    }
 
     #[tokio::test]
     async fn audio_retention_cleans_startup_and_then_idle_caches() {

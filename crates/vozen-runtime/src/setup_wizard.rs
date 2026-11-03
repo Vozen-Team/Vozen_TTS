@@ -218,13 +218,18 @@ fn completion_message(
     session: &PendingSetup,
     channel_id: ChannelId,
     server_locale: &str,
+    autojoin: bool,
     localizer: &VoiceResponseLocalizer,
 ) -> CreateMessage {
     let mut public_session = session.clone();
     public_session.locale = server_locale.into();
     let description = localizer
         .render_key(
-            "wizard.readyDescription",
+            if autojoin {
+                "wizard.readyDescription"
+            } else {
+                "wizard.readyDescriptionManualJoin"
+            },
             Some(server_locale),
             None,
             &BTreeMap::from([("channel", format!("<#{}>", channel_id))]),
@@ -904,6 +909,7 @@ impl SetupGatewaySink {
                             &session,
                             channel_id,
                             &saved.locale,
+                            saved.autojoin,
                             &self.localizer,
                         ),
                     )
@@ -1080,16 +1086,15 @@ mod tests {
             &session,
             session.channel.unwrap(),
             "en",
+            false,
             &localizer,
         ))
         .unwrap();
         assert!(public["content"].is_null());
         assert_eq!(public["embeds"][0]["title"], "Vozen is ready");
-        assert!(
-            public["embeds"][0]["description"]
-                .as_str()
-                .unwrap()
-                .contains("<#77>")
+        assert_eq!(
+            public["embeds"][0]["description"],
+            "Join a voice channel, use `/join`, then write in <#77>."
         );
         assert_eq!(public["embeds"][0]["color"], 0x57F287);
         assert!(
@@ -1114,6 +1119,7 @@ mod tests {
             &session,
             ChannelId::new(77),
             "es",
+            true,
             &localizer,
         ))
         .unwrap();
@@ -1122,11 +1128,9 @@ mod tests {
             "Probar voz"
         );
         assert_eq!(spanish["embeds"][0]["title"], "Vozen está listo");
-        assert!(
-            spanish["embeds"][0]["description"]
-                .as_str()
-                .unwrap()
-                .contains("<#77>")
+        assert_eq!(
+            spanish["embeds"][0]["description"],
+            "Entra en una llamada y escribe en <#77>."
         );
         for key in ["wizard.openChannel", "wizard.postFailed"] {
             let notice = localizer
@@ -1138,6 +1142,35 @@ mod tests {
                 )
                 .unwrap();
             assert!(notice.contains("Configuração guardada") && notice.contains("<#77>"));
+        }
+    }
+
+    #[test]
+    fn completion_localizes_manual_join_guidance_with_english_fallback() {
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
+        let mut session = PendingSetup::new(7, 42, 100);
+        session.confirmed = true;
+        for (locale, expected) in [
+            ("pt", "Entra numa chamada, usa `/join` e escreve em <#77>."),
+            (
+                "es",
+                "Entra en una llamada, usa `/join` y escribe en <#77>.",
+            ),
+            (
+                "fr",
+                "Join a voice channel, use `/join`, then write in <#77>.",
+            ),
+        ] {
+            let public = serde_json::to_value(completion_message(
+                "0123456789abcdef0123456789abcdef",
+                &session,
+                ChannelId::new(77),
+                locale,
+                false,
+                &localizer,
+            ))
+            .unwrap();
+            assert_eq!(public["embeds"][0]["description"], expected);
         }
     }
 

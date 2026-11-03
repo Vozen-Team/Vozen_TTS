@@ -153,6 +153,7 @@ pub struct CoreVoiceGatewaySink {
     randomizer_sessions: Mutex<BTreeMap<String, RandomizerSession>>,
     cast_sessions: Mutex<BTreeMap<String, CastSession>>,
     greet_cooldown: Mutex<BTreeMap<String, i64>>,
+    planned_rejoin_marker: Option<PathBuf>,
     rejoin_attempted: AtomicBool,
     game_runtime: Option<Arc<GameRuntime>>,
     runtime_batch: RuntimeBatchBuffer,
@@ -1630,6 +1631,7 @@ impl CoreVoiceGatewaySink {
             gateway_state,
             options,
             runtime_batch,
+            None,
         )
     }
 
@@ -1640,6 +1642,7 @@ impl CoreVoiceGatewaySink {
         gateway_state: GatewayState,
         options: CoreVoiceRuntimeOptions,
         runtime_batch: RuntimeBatchBuffer,
+        planned_rejoin_marker: Option<PathBuf>,
     ) -> Self {
         let game_runtime = options
             .game_play_enabled
@@ -1685,6 +1688,7 @@ impl CoreVoiceGatewaySink {
             randomizer_sessions: Mutex::new(BTreeMap::new()),
             cast_sessions: Mutex::new(BTreeMap::new()),
             greet_cooldown: Mutex::new(BTreeMap::new()),
+            planned_rejoin_marker,
             rejoin_attempted: AtomicBool::new(false),
             game_runtime,
             runtime_batch,
@@ -1861,7 +1865,7 @@ impl CoreVoiceGatewaySink {
         &self,
         context: &Context,
         facts: &DiscordMessageFactsOwned,
-    ) -> bool {
+    ) -> Option<vozen_discord::VoiceDestination> {
         let eligible = self
             .store
             .lock()
@@ -1871,40 +1875,24 @@ impl CoreVoiceGatewaySink {
             })
             .unwrap_or(false);
         if !eligible {
-            return false;
+            return None;
         }
-        let Some(author_voice_channel_id) = facts.author_voice_channel_id.as_deref() else {
-            return false;
-        };
-        let Ok(guild_number) = facts.guild_id.parse::<u64>() else {
-            return false;
-        };
-        let Ok(channel_number) = author_voice_channel_id.parse::<u64>() else {
-            return false;
-        };
+        let author_voice_channel_id = facts.author_voice_channel_id.as_deref()?;
+        let guild_number = facts.guild_id.parse::<u64>().ok()?;
+        let channel_number = author_voice_channel_id.parse::<u64>().ok()?;
         let guild_id = GuildId::new(guild_number);
         let channel_id = ChannelId::new(channel_number);
-        let Ok(channels) = guild_id.channels(&context.http).await else {
-            return false;
-        };
-        let Some(voice) = channels.get(&channel_id) else {
-            return false;
-        };
+        let channels = guild_id.channels(&context.http).await.ok()?;
+        let voice = channels.get(&channel_id)?;
         if !matches!(voice.kind, ChannelType::Voice | ChannelType::Stage) {
-            return false;
+            return None;
         }
-        let Ok(guild) = guild_id.to_partial_guild(&context.http).await else {
-            return false;
-        };
-        let Ok(bot) = context.http.get_current_user().await else {
-            return false;
-        };
-        let Ok(bot_member) = guild_id.member(&context.http, bot.id).await else {
-            return false;
-        };
+        let guild = guild_id.to_partial_guild(&context.http).await.ok()?;
+        let bot = context.http.get_current_user().await.ok()?;
+        let bot_member = guild_id.member(&context.http, bot.id).await.ok()?;
         let permissions = guild.user_permissions_in(voice, &bot_member);
         if !permissions.contains(Permissions::CONNECT | Permissions::SPEAK) {
-            return false;
+            return None;
         }
         let core_facts = CoreVoiceInteractionFacts {
             guild_id: facts.guild_id.clone(),
@@ -1912,13 +1900,23 @@ impl CoreVoiceGatewaySink {
             user_id: facts.author_id.clone(),
             member_role_ids: None,
         };
-        let Ok(executor) = self.executor(context) else {
-            return false;
-        };
-        matches!(
-            executor.join_for_message(&core_facts).await,
+        let executor = self.executor(context).ok()?;
+        if !matches!(
+            executor
+                .join_for_message(&core_facts, author_voice_channel_id)
+                .await,
             CoreVoiceOutcome::Joined(JoinVoiceOutcome::Joined)
-        )
+        ) || self
+            .gateway_state
+            .voice_channel_id(&facts.guild_id, &facts.author_id)
+            .as_deref()
+            != Some(author_voice_channel_id)
+        {
+            return None;
+        }
+        self.gateway_state
+            .bot_voice_destination(&facts.guild_id)
+            .filter(|destination| destination.channel_id() == author_voice_channel_id)
     }
 
     fn greet_cooldown_allows(&self, guild_id: &str, user_id: &str, now_ms: i64) -> bool {
@@ -2059,8 +2057,10 @@ impl CoreVoiceGatewaySink {
         if self.rejoin_attempted.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let marker_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let scope = consume_planned_rejoin_marker(&marker_directory, std::time::SystemTime::now());
+        let scope = self
+            .planned_rejoin_marker
+            .as_deref()
+            .and_then(|path| consume_planned_rejoin_marker(path, std::time::SystemTime::now()));
         let presences = self
             .store
             .lock()
@@ -3643,6 +3643,10 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
         {
             return Ok(());
         }
+        let original_destination = message.guild_id.and_then(|guild_id| {
+            self.gateway_state
+                .bot_voice_destination(&guild_id.get().to_string())
+        });
         let Some(facts) = DiscordMessageFactsOwned::from_message(&self.gateway_state, &message)
         else {
             return Ok(());
@@ -3651,7 +3655,13 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
         if message.content.is_empty() && media.is_empty() {
             return Ok(());
         }
-        let autojoined_for_author = self.maybe_autojoin_for_message(&context, &facts).await;
+        // A message observed in a call cannot start a new autojoin after that call ends.
+        let autojoined_destination = if original_destination.is_none() {
+            self.maybe_autojoin_for_message(&context, &facts).await
+        } else {
+            None
+        };
+        let autojoined_for_author = autojoined_destination.is_some();
         let service = self.message_service(&context)?;
         let announce_speaker = self.announce_speaker(&facts, &message);
         let detected_language = self.detected_language(&facts, &message.content);
@@ -3682,6 +3692,7 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
         let outcome = service
             .execute(MessageVoiceInvocation {
                 facts: facts.as_borrowed_with_autojoined(autojoined_for_author),
+                destination: autojoined_destination.or(original_destination),
                 raw: &message.content,
                 media: &media,
                 detected_language,
