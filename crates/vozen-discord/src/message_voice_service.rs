@@ -23,7 +23,7 @@ use crate::speech_telemetry::SpeechTelemetryWriter;
 use crate::{
     CommandSpeechSynthesizer, CommandVoicePlayback, CoreVoiceSettings, DiscordMessageFacts,
     GuildSynthesisCoordinator, MessagePipelineOutcome, MessagePreparationInput,
-    MessageSpeechPipeline, VoiceDataCache, admit_discord_message_with_data,
+    MessageSpeechPipeline, VoiceDataCache, VoiceDestination, admit_discord_message_with_data,
 };
 
 /// Per-message values which are never persisted. `facts` must come from the same Discord event
@@ -31,6 +31,7 @@ use crate::{
 /// stale database values.
 pub struct MessageVoiceInvocation<'a> {
     pub facts: DiscordMessageFacts<'a>,
+    pub destination: Option<VoiceDestination>,
     pub raw: &'a str,
     pub media: &'a [MediaAnnouncement],
     pub detected_language: Option<&'a str>,
@@ -320,6 +321,18 @@ where
             return MessageVoiceOutcome::SpamSuppressed;
         }
 
+        let expected_channel = if invocation.facts.autojoined_for_author {
+            invocation.facts.author_voice_channel_id
+        } else {
+            invocation.facts.bot_voice_channel_id
+        };
+        let Some(destination) = invocation
+            .destination
+            .as_ref()
+            .filter(|destination| Some(destination.channel_id()) == expected_channel)
+        else {
+            return MessageVoiceOutcome::PlaybackFailed;
+        };
         let admitted_generation = self
             .synthesis
             .admission_generation(invocation.facts.guild_id);
@@ -330,7 +343,7 @@ where
             .await;
         let gate_wait_ms = elapsed_ms(gate_started);
         self.metrics.record_gate_wait_ms(gate_wait_ms);
-        if synthesis.was_cleared() {
+        if synthesis.was_cleared() || !destination.is_current() {
             return MessageVoiceOutcome::PlaybackFailed;
         }
         synthesis.activate();
@@ -347,7 +360,7 @@ where
             }
             Err(_) => return MessageVoiceOutcome::PlaybackFailed,
         }
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.facts.guild_id, lane)
@@ -384,7 +397,7 @@ where
             }
         };
         let synth_ms = elapsed_ms(synth_started);
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.facts.guild_id, lane)
@@ -396,6 +409,7 @@ where
             .playback
             .enqueue_reserved(
                 invocation.facts.guild_id,
+                destination,
                 Path::new(&wav),
                 QueueEnqueueOptions {
                     author_id: Some(invocation.facts.author_id),
@@ -643,6 +657,7 @@ mod tests {
         async fn enqueue_reserved(
             &self,
             _guild_id: &str,
+            _destination: &VoiceDestination,
             _wav: &Path,
             _options: QueueEnqueueOptions<'_>,
         ) -> Result<(), CommandPlaybackError> {
@@ -697,6 +712,7 @@ mod tests {
                 member_role_ids: Some(&[]),
                 autojoined_for_author: false,
             },
+            destination: Some(VoiceDestination::new("voice".into())),
             raw,
             media: &[],
             detected_language: None,
@@ -991,6 +1007,7 @@ mod tests {
                             member_role_ids: Some(&[]),
                             autojoined_for_author: false,
                         },
+                        destination: Some(VoiceDestination::new("voice".into())),
                         raw: "parallel hello",
                         media: &[],
                         detected_language: None,

@@ -20,8 +20,8 @@ use vozen_store::{SqliteStore, UserEngine};
 use crate::{
     CommandSpeechInput, CommandSpeechOutcome, CommandSpeechPipeline, CoreVoiceCommand,
     GatewayState, GuildSynthesisCoordinator, JoinVoiceOutcome, LeaveVoiceOutcome, MicroFunKind,
-    VoiceSessionService, VoiceSessionTransport, gcloud_budget_for, joke_lang_by_key,
-    laughter_for_model, laughter_for_prefix, pick_joke,
+    VoiceDestination, VoiceSessionService, VoiceSessionTransport, gcloud_budget_for,
+    joke_lang_by_key, laughter_for_model, laughter_for_prefix, pick_joke,
 };
 
 #[derive(Debug, Error)]
@@ -81,6 +81,7 @@ pub trait CommandVoicePlayback: Send + Sync {
     async fn enqueue_reserved(
         &self,
         guild_id: &str,
+        destination: &VoiceDestination,
         wav: &Path,
         options: QueueEnqueueOptions<'_>,
     ) -> Result<(), CommandPlaybackError>;
@@ -428,6 +429,9 @@ where
         engine: SynthesisEngine,
         enforce_rate_limit: bool,
     ) -> CoreTtsOutcome {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let roles = invocation
             .member_role_ids
             .map(|roles| roles.iter().map(String::as_str).collect::<Vec<_>>());
@@ -451,10 +455,7 @@ where
                         .gateway_state
                         .voice_channel_id(invocation.guild_id, invocation.user_id)
                         .as_deref(),
-                    bot_voice_channel_id: self
-                        .gateway_state
-                        .bot_voice_channel_id(invocation.guild_id)
-                        .as_deref(),
+                    bot_voice_channel_id: destination.as_ref().map(VoiceDestination::channel_id),
                     member_role_ids: roles.as_deref(),
                     available_models: &self.settings.available_models,
                     runtime_default_voice: &self.settings.default_voice,
@@ -493,7 +494,13 @@ where
         request.segments = None;
         request.single_voice = Some(true);
         match self
-            .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, request)
+            .enqueue_synth_request(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                request,
+            )
             .await
         {
             CorePreviewOutcome::Queued => CoreTtsOutcome::Queued,
@@ -502,6 +509,21 @@ where
             CorePreviewOutcome::PlaybackFailed => CoreTtsOutcome::PlaybackFailed,
             _ => CoreTtsOutcome::PlaybackFailed,
         }
+    }
+
+    pub async fn join_for_message(
+        &self,
+        invocation: CoreVoiceInvocation<'_>,
+        expected_channel: &str,
+    ) -> JoinVoiceOutcome {
+        self.sessions
+            .join_for_message(
+                invocation.guild_id,
+                invocation.user_id,
+                expected_channel,
+                (self.now_ms)(),
+            )
+            .await
     }
 
     /// Leaves a call from a gateway lifecycle rule (for example, when no humans remain).
@@ -522,6 +544,9 @@ where
         explicit_engine: Option<&str>,
         sample: &str,
     ) -> CorePreviewOutcome {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         if let Some(model) = explicit_model
             && !self
                 .settings
@@ -560,9 +585,7 @@ where
                 self.gateway_state
                     .voice_channel_id(invocation.guild_id, invocation.user_id)
                     .as_deref(),
-                self.gateway_state
-                    .bot_voice_channel_id(invocation.guild_id)
-                    .as_deref(),
+                destination.as_ref().map(VoiceDestination::channel_id),
                 roles.as_deref(),
                 policy,
             ) {
@@ -618,12 +641,15 @@ where
             (model, speed, engine, lane)
         };
 
+        let Some(destination) = destination.as_ref() else {
+            return CorePreviewOutcome::PlaybackFailed;
+        };
         let admitted_generation = self.synthesis.admission_generation(invocation.guild_id);
         let mut synthesis = self
             .synthesis
             .acquire(invocation.guild_id, admitted_generation)
             .await;
-        if synthesis.was_cleared() {
+        if synthesis.was_cleared() || !destination.is_current() {
             return CorePreviewOutcome::PlaybackFailed;
         }
         synthesis.activate();
@@ -649,7 +675,7 @@ where
             emphasis_source: None,
             lead_silence_ms: 0,
         };
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.guild_id, lane)
@@ -666,7 +692,7 @@ where
                 return CorePreviewOutcome::SynthesisFailed;
             }
         };
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.guild_id, lane)
@@ -677,6 +703,7 @@ where
             .playback
             .enqueue_reserved(
                 invocation.guild_id,
+                destination,
                 &wav,
                 QueueEnqueueOptions {
                     author_id: Some(invocation.user_id),
@@ -741,6 +768,9 @@ where
         language: Option<&str>,
         explicit_engine: Option<&str>,
     ) -> CoreMicroFunResult {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let locale = self
             .store
             .lock()
@@ -807,9 +837,7 @@ where
                 self.gateway_state
                     .voice_channel_id(invocation.guild_id, invocation.user_id)
                     .as_deref(),
-                self.gateway_state
-                    .bot_voice_channel_id(invocation.guild_id)
-                    .as_deref(),
+                destination.as_ref().map(VoiceDestination::channel_id),
                 roles.as_deref(),
                 policy,
             ) {
@@ -892,8 +920,14 @@ where
             lead_silence_ms: 0,
         };
         result.queued = matches!(
-            self.enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, request)
-                .await,
+            self.enqueue_synth_request(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                request
+            )
+            .await,
             CorePreviewOutcome::Queued
         );
         result
@@ -908,6 +942,9 @@ where
         sound: bool,
         explicit_engine: Option<&str>,
     ) -> CoreRizzResult {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let now = (self.now_ms)();
         let premium = {
             let Ok(store) = self.store.lock() else {
@@ -976,9 +1013,7 @@ where
                 self.gateway_state
                     .voice_channel_id(invocation.guild_id, invocation.user_id)
                     .as_deref(),
-                self.gateway_state
-                    .bot_voice_channel_id(invocation.guild_id)
-                    .as_deref(),
+                destination.as_ref().map(VoiceDestination::channel_id),
                 roles.as_deref(),
                 policy,
             ) {
@@ -1058,7 +1093,13 @@ where
             lead_silence_ms: 0,
         };
         let outcome = self
-            .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, request)
+            .enqueue_synth_request(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                request,
+            )
             .await;
         if outcome == CorePreviewOutcome::Queued && sound {
             let effect = SynthRequest {
@@ -1076,7 +1117,13 @@ where
                 lead_silence_ms: 0,
             };
             let _ = self
-                .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, effect)
+                .enqueue_synth_request(
+                    invocation.guild_id,
+                    invocation.user_id,
+                    destination.as_ref(),
+                    lane,
+                    effect,
+                )
                 .await;
         }
         CoreRizzResult {
@@ -1103,6 +1150,9 @@ where
         invocation: CoreVoiceInvocation<'_>,
         name: Option<&str>,
     ) -> CoreSoundResult {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let config = {
             let Ok(store) = self.store.lock() else {
                 return CoreSoundResult {
@@ -1162,9 +1212,7 @@ where
                 self.gateway_state
                     .voice_channel_id(invocation.guild_id, invocation.user_id)
                     .as_deref(),
-                self.gateway_state
-                    .bot_voice_channel_id(invocation.guild_id)
-                    .as_deref(),
+                destination.as_ref().map(VoiceDestination::channel_id),
                 roles.as_deref(),
                 policy,
             ) {
@@ -1219,7 +1267,13 @@ where
             lead_silence_ms: 0,
         };
         let outcome = self
-            .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, request)
+            .enqueue_synth_request(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                request,
+            )
             .await;
         CoreSoundResult {
             outcome: match outcome {
@@ -1248,6 +1302,9 @@ where
         laughter: bool,
         explicit_engine: Option<&str>,
     ) -> CoreJokeResult {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let playback_state = match self.playback.state(invocation.guild_id).await {
             Ok(state) => state,
             Err(_) => {
@@ -1294,9 +1351,7 @@ where
                 self.gateway_state
                     .voice_channel_id(invocation.guild_id, invocation.user_id)
                     .as_deref(),
-                self.gateway_state
-                    .bot_voice_channel_id(invocation.guild_id)
-                    .as_deref(),
+                destination.as_ref().map(VoiceDestination::channel_id),
                 roles.as_deref(),
                 policy,
             ) {
@@ -1426,7 +1481,13 @@ where
             lead_silence_ms: 0,
         };
         let queued = match self
-            .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, joke_request)
+            .enqueue_synth_request(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                joke_request,
+            )
             .await
         {
             CorePreviewOutcome::Queued => true,
@@ -1487,7 +1548,13 @@ where
                 lead_silence_ms: 1_000,
             };
             let _ = self
-                .enqueue_synth_request(invocation.guild_id, invocation.user_id, lane, laugh_request)
+                .enqueue_synth_request(
+                    invocation.guild_id,
+                    invocation.user_id,
+                    destination.as_ref(),
+                    lane,
+                    laugh_request,
+                )
                 .await;
         }
         CoreJokeResult {
@@ -1500,12 +1567,16 @@ where
         &self,
         guild_id: &str,
         user_id: &str,
+        destination: Option<&VoiceDestination>,
         lane: QueueLane,
         request: SynthRequest,
     ) -> CorePreviewOutcome {
+        let Some(destination) = destination else {
+            return CorePreviewOutcome::PlaybackFailed;
+        };
         let admitted_generation = self.synthesis.admission_generation(guild_id);
         let mut synthesis = self.synthesis.acquire(guild_id, admitted_generation).await;
-        if synthesis.was_cleared() {
+        if synthesis.was_cleared() || !destination.is_current() {
             return CorePreviewOutcome::PlaybackFailed;
         }
         synthesis.activate();
@@ -1514,7 +1585,7 @@ where
             Ok(false) => return CorePreviewOutcome::Busy,
             Err(_) => return CorePreviewOutcome::PlaybackFailed,
         }
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self.playback.cancel_reservation(guild_id, lane).await;
             return CorePreviewOutcome::PlaybackFailed;
         }
@@ -1525,7 +1596,7 @@ where
                 return CorePreviewOutcome::SynthesisFailed;
             }
         };
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self.playback.cancel_reservation(guild_id, lane).await;
             return CorePreviewOutcome::PlaybackFailed;
         }
@@ -1533,6 +1604,7 @@ where
             .playback
             .enqueue_reserved(
                 guild_id,
+                destination,
                 &wav,
                 QueueEnqueueOptions {
                     author_id: Some(user_id),
@@ -1595,6 +1667,9 @@ where
     }
 
     async fn execute_tts(&self, invocation: CoreVoiceInvocation<'_>, text: &str) -> CoreTtsOutcome {
+        let destination = self
+            .gateway_state
+            .bot_voice_destination(invocation.guild_id);
         let roles = invocation
             .member_role_ids
             .map(|roles| roles.iter().map(String::as_str).collect::<Vec<_>>());
@@ -1618,10 +1693,7 @@ where
                         .gateway_state
                         .voice_channel_id(invocation.guild_id, invocation.user_id)
                         .as_deref(),
-                    bot_voice_channel_id: self
-                        .gateway_state
-                        .bot_voice_channel_id(invocation.guild_id)
-                        .as_deref(),
+                    bot_voice_channel_id: destination.as_ref().map(VoiceDestination::channel_id),
                     member_role_ids: roles.as_deref(),
                     available_models: &self.settings.available_models,
                     runtime_default_voice: &self.settings.default_voice,
@@ -1644,12 +1716,15 @@ where
             Ok(CommandSpeechOutcome::FullyBlocked) => return CoreTtsOutcome::FullyBlocked,
             Err(_) => return CoreTtsOutcome::StoreUnavailable,
         };
+        let Some(destination) = destination.as_ref() else {
+            return CoreTtsOutcome::PlaybackFailed;
+        };
         let admitted_generation = self.synthesis.admission_generation(invocation.guild_id);
         let mut synthesis = self
             .synthesis
             .acquire(invocation.guild_id, admitted_generation)
             .await;
-        if synthesis.was_cleared() {
+        if synthesis.was_cleared() || !destination.is_current() {
             return CoreTtsOutcome::PlaybackFailed;
         }
         synthesis.activate();
@@ -1659,7 +1734,7 @@ where
             Ok(false) => return CoreTtsOutcome::Busy,
             Err(_) => return CoreTtsOutcome::PlaybackFailed,
         }
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.guild_id, lane)
@@ -1676,7 +1751,7 @@ where
                 return CoreTtsOutcome::SynthesisFailed;
             }
         };
-        if synthesis.cancelled() {
+        if synthesis.cancelled() || !destination.is_current() {
             let _ = self
                 .playback
                 .cancel_reservation(invocation.guild_id, lane)
@@ -1687,6 +1762,7 @@ where
             .playback
             .enqueue_reserved(
                 invocation.guild_id,
+                destination,
                 &wav,
                 QueueEnqueueOptions {
                     author_id: Some(invocation.user_id),
@@ -1903,6 +1979,7 @@ mod tests {
         async fn enqueue_reserved(
             &self,
             _guild_id: &str,
+            _destination: &VoiceDestination,
             _wav: &Path,
             _options: QueueEnqueueOptions<'_>,
         ) -> Result<(), CommandPlaybackError> {
@@ -2546,5 +2623,63 @@ mod tests {
         );
         assert_eq!(service.playback.enqueues.load(Ordering::Relaxed), 0);
         assert_eq!(service.playback.reservations.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn speech_cannot_cross_voice_sessions_during_synthesis() {
+        for return_to_original in [false, true] {
+            let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
+            let state = GatewayState::default();
+            state.remember_bot_user("bot".into());
+            state.update_voice_state("guild", "user", Some("voice".into()));
+            state.set_bot_voice_channel("guild", Some("voice".into()));
+            let started = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let service = Arc::new(CoreVoiceService::new(
+                store,
+                state.clone(),
+                FakeVoiceTransport,
+                BlockingSynthesizer {
+                    started: started.clone(),
+                    release: release.clone(),
+                },
+                FakePlayback {
+                    accepted: true,
+                    state: CommandPlaybackState::Idle,
+                    ..FakePlayback::default()
+                },
+                CoreVoiceSettings {
+                    available_models: vec!["en_US-amy-medium".into()],
+                    default_voice: "en_US-amy-medium".into(),
+                    default_speed: 1.0,
+                    default_engine: SynthesisEngine::Piper,
+                },
+                Arc::new(|| 0),
+            ));
+            let command = CoreVoiceCommand::Tts {
+                text: "hello".into(),
+            };
+            let queued = service.execute(invocation(), &command);
+            tokio::pin!(queued);
+            let started_signal = started.notified();
+            tokio::pin!(started_signal);
+            tokio::select! {
+                _ = &mut started_signal => {}
+                outcome = &mut queued => panic!("synthesis completed before channel transition: {outcome:?}"),
+            }
+            state.set_bot_voice_channel("guild", Some("other".into()));
+            if return_to_original {
+                state.set_bot_voice_channel("guild", None);
+                state.set_bot_voice_channel("guild", Some("voice".into()));
+            }
+            release.notify_one();
+
+            assert_eq!(
+                queued.await,
+                CoreVoiceOutcome::Tts(CoreTtsOutcome::PlaybackFailed)
+            );
+            assert_eq!(service.playback.enqueues.load(Ordering::Relaxed), 0);
+            assert_eq!(service.playback.reservations.load(Ordering::Relaxed), 0);
+        }
     }
 }

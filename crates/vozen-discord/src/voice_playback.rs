@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::{CommandPlaybackError, CommandPlaybackState, CommandVoicePlayback};
+use crate::{CommandPlaybackError, CommandPlaybackState, CommandVoicePlayback, VoiceDestination};
 
 #[cfg(feature = "voice-driver")]
 use crate::QueueControlPlayback;
@@ -450,11 +450,16 @@ impl SongbirdCommandPlayback {
         guild_id: &str,
         id: Uuid,
         metadata: QueueTrackMetadata,
+        queue_was_empty: bool,
     ) -> Result<(), CommandPlaybackError> {
-        self.queue_metadata
+        let mut ledger = self
+            .queue_metadata
             .lock()
-            .map_err(|_| CommandPlaybackError)?
-            .remember(guild_id, id, metadata);
+            .map_err(|_| CommandPlaybackError)?;
+        if queue_was_empty {
+            ledger.clear(guild_id);
+        }
+        ledger.remember(guild_id, id, metadata);
         Ok(())
     }
 }
@@ -500,6 +505,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
     async fn enqueue_reserved(
         &self,
         guild_id: &str,
+        destination: &VoiceDestination,
         wav: &Path,
         options: QueueEnqueueOptions<'_>,
     ) -> Result<(), CommandPlaybackError> {
@@ -515,6 +521,20 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
             .ok_or(CommandPlaybackError)?;
         let call = manager.get(discord_guild_id).ok_or(CommandPlaybackError)?;
         let mut handler = call.lock().await;
+        if !destination.is_current()
+            || handler.current_channel().map(|channel| channel.0.get())
+                != Some(
+                    destination
+                        .channel_id()
+                        .parse::<u64>()
+                        .map_err(|_| CommandPlaybackError)?,
+                )
+            || handler.current_connection().is_none()
+            || songbird_driver(&handler).is_mute()
+        {
+            return Err(CommandPlaybackError);
+        }
+        handler.set_stop_queue_on_voice_change(true);
         let id = Uuid::new_v4();
         self.remember_track(
             guild_id,
@@ -525,6 +545,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
                 lane: options.lane,
                 created_at_ms: options.created_at_ms,
             },
+            songbird_driver(&handler).queue().is_empty(),
         )?;
         let wav = wav.to_path_buf();
         let mut track =
@@ -561,21 +582,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
             );
         }
         let handle = songbird_driver_mut(&mut handler).enqueue(track).await;
-        let connected = handler.current_connection().is_some();
-        let muted = songbird_driver(&handler).is_mute();
         drop(handler);
-
-        if !connected || muted {
-            eprintln!(
-                "[voice:playback] refusing queued track: connected={connected} muted={muted}"
-            );
-            let _ = handle.stop();
-            self.queue_metadata
-                .lock()
-                .map_err(|_| CommandPlaybackError)?
-                .remove(guild_id, id);
-            return Err(CommandPlaybackError);
-        }
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -741,7 +748,6 @@ impl QueueControlPlayback for SongbirdCommandPlayback {
         let call = manager.get(discord_guild_id).ok_or(CommandPlaybackError)?;
         let handler = call.lock().await;
         let current = songbird_driver(&handler).queue().current();
-        drop(handler);
         let Some(current) = current else {
             return Ok(false);
         };
@@ -772,7 +778,6 @@ impl QueueControlPlayback for SongbirdCommandPlayback {
         let call = manager.get(discord_guild_id).ok_or(CommandPlaybackError)?;
         let handler = call.lock().await;
         let current = songbird_driver(&handler).queue().current();
-        drop(handler);
         let Some(current) = current else {
             return Ok(false);
         };
@@ -822,6 +827,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
     async fn enqueue_reserved(
         &self,
         _guild_id: &str,
+        _destination: &VoiceDestination,
         _wav: &Path,
         _options: vozen_core::QueueEnqueueOptions<'_>,
     ) -> Result<(), CommandPlaybackError> {
@@ -847,7 +853,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
 
 /// Joins (or switches to) the requested call and queues a local WAV after already accepted work.
 /// Songbird's native queue starts the first item immediately and advances only when the prior
-/// track ends, so a new request can never interrupt another user's accepted speech.
+/// track ends. Switching channels clears speech from the previous call.
 /// Callers must already have verified same-call/premium/rejoin policy and Connect+Speak access;
 /// this adapter never turns a stored channel id into authorization.
 #[cfg(feature = "voice-driver")]
@@ -865,6 +871,13 @@ pub async fn join_and_enqueue_wav(
         .await
         .map_err(|_| VoicePlaybackError::JoinFailed)?;
     let mut handler = call.lock().await;
+    if handler.current_channel() != Some(channel_id.into())
+        || handler.current_connection().is_none()
+        || songbird_driver(&handler).is_mute()
+    {
+        return Err(VoicePlaybackError::JoinFailed);
+    }
+    handler.set_stop_queue_on_voice_change(true);
     let handle = songbird_driver_mut(&mut handler)
         .enqueue_input(songbird::input::File::new(wav).into())
         .await;

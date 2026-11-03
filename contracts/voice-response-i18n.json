@@ -571,6 +571,7 @@
     "wizard.categoryLabel",
     "wizard.readyTitle",
     "wizard.readyDescription",
+    "wizard.readyDescriptionManualJoin",
     "wizard.readyFooter"
   ],
   "messages": {
@@ -1106,6 +1107,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "pt": {
@@ -1640,6 +1642,7 @@
       "wizard.categoryLabel": "Categoria",
       "wizard.readyTitle": "O Vozen está pronto",
       "wizard.readyDescription": "Entra numa chamada e escreve em {channel}.",
+      "wizard.readyDescriptionManualJoin": "Entra numa chamada, usa `/join` e escreve em {channel}.",
       "wizard.readyFooter": "Escolhe a tua voz com /voice."
     },
     "es": {
@@ -2174,6 +2177,7 @@
       "wizard.categoryLabel": "Categoría",
       "wizard.readyTitle": "Vozen está listo",
       "wizard.readyDescription": "Entra en una llamada y escribe en {channel}.",
+      "wizard.readyDescriptionManualJoin": "Entra en una llamada, usa `/join` y escribe en {channel}.",
       "wizard.readyFooter": "Elige tu voz con /voice."
     },
     "fr": {
@@ -2708,6 +2712,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "de": {
@@ -3242,6 +3247,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "nl": {
@@ -3776,6 +3782,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "pl": {
@@ -4310,6 +4317,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "tr": {
@@ -4844,6 +4852,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "cs": {
@@ -5378,6 +5387,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "sv": {
@@ -5912,6 +5922,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "fi": {
@@ -6446,6 +6457,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "da": {
@@ -6980,6 +6992,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ro": {
@@ -7514,6 +7527,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "hu": {
@@ -8048,6 +8062,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "cy": {
@@ -8582,6 +8597,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "is": {
@@ -9116,6 +9132,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "lb": {
@@ -9650,6 +9667,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "lv": {
@@ -10184,6 +10202,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "sk": {
@@ -10718,6 +10737,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "sl": {
@@ -11252,6 +11272,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "sw": {
@@ -11786,6 +11807,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "vi": {
@@ -12320,6 +12342,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ca": {
@@ -12854,6 +12877,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "it": {
@@ -13388,6 +13412,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "el": {
@@ -13922,6 +13947,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ru": {
@@ -14456,6 +14482,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "uk": {
@@ -14990,6 +15017,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "kk": {
@@ -15524,6 +15552,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "sr": {
@@ -16058,6 +16087,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ar": {
@@ -16592,6 +16622,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "fa": {
@@ -17126,6 +17157,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ka": {
@@ -17660,6 +17692,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ne": {
@@ -18194,6 +18227,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "zh": {
@@ -18728,6 +18762,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     },
     "ja": {
@@ -19262,6 +19297,7 @@
       "wizard.categoryLabel": "Category",
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
+      "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
       "wizard.readyFooter": "Choose your voice with /voice."
     }
   }

@@ -529,6 +529,30 @@ pub struct GatewayGuildSnapshot {
     pub joined_timestamp: i64,
 }
 
+/// The live bot channel and the lifetime of the session that admitted speech.
+#[derive(Clone, Debug)]
+pub struct VoiceDestination {
+    channel_id: String,
+    current: Arc<AtomicBool>,
+}
+
+impl VoiceDestination {
+    fn new(channel_id: String) -> Self {
+        Self {
+            channel_id,
+            current: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn channel_id(&self) -> &str {
+        &self.channel_id
+    }
+
+    fn is_current(&self) -> bool {
+        self.current.load(Ordering::Acquire)
+    }
+}
+
 /// Minimal gateway facts used by the Rust adapters. It intentionally contains neither message
 /// content, profiles nor tokens: the only live voice data is a transient guild/user/channel ID
 /// mapping required to enforce same-call speech admission without Serenity's global member cache.
@@ -541,6 +565,7 @@ pub struct GatewayState {
     guild_names: Arc<RwLock<BTreeMap<String, String>>>,
     guild_snapshots: Arc<RwLock<BTreeMap<String, GatewayGuildSnapshot>>>,
     voice_channels: Arc<RwLock<BTreeMap<String, BTreeMap<String, String>>>>,
+    voice_destinations: Arc<RwLock<BTreeMap<String, VoiceDestination>>>,
     voice_bots: Arc<RwLock<BTreeMap<String, BTreeMap<String, bool>>>>,
     shard_stages: Arc<RwLock<BTreeMap<u64, ConnectionStage>>>,
     voice_drops_pending_reconnect: Arc<RwLock<BTreeSet<String>>>,
@@ -635,6 +660,28 @@ impl GatewayState {
     pub fn bot_voice_channel_id(&self, guild_id: &str) -> Option<String> {
         let bot_user_id = self.bot_user_id.read().ok()?.clone()?;
         self.voice_channel_id(guild_id, &bot_user_id)
+    }
+
+    pub fn bot_voice_destination(&self, guild_id: &str) -> Option<VoiceDestination> {
+        self.voice_destinations.read().ok()?.get(guild_id).cloned()
+    }
+
+    // Call with the voice-channel write lock held so snapshots and events cannot reorder this.
+    fn update_voice_destination(&self, guild_id: &str, channel_id: Option<&str>) {
+        if let Ok(mut destinations) = self.voice_destinations.write() {
+            if destinations.get(guild_id).map(VoiceDestination::channel_id) == channel_id {
+                return;
+            }
+            if let Some(previous) = destinations.remove(guild_id) {
+                previous.current.store(false, Ordering::Release);
+            }
+            if let Some(channel_id) = channel_id {
+                destinations.insert(
+                    guild_id.to_owned(),
+                    VoiceDestination::new(channel_id.to_owned()),
+                );
+            }
+        }
     }
 
     /// Snapshots only Vozen's current guild/channel pairs for a clean shutdown marker. The
@@ -851,8 +898,12 @@ impl GatewayState {
                 })
             })
             .collect::<BTreeMap<_, _>>();
+        let guild_id = guild.id.get().to_string();
+        let bot_user_id = self.bot_user_id();
         if let Ok(mut guilds) = self.voice_channels.write() {
-            guilds.insert(guild.id.get().to_string(), voice_states);
+            let bot_channel = bot_user_id.as_ref().and_then(|id| voice_states.get(id));
+            self.update_voice_destination(&guild_id, bot_channel.map(String::as_str));
+            guilds.insert(guild_id, voice_states);
         }
         if let Ok(mut guilds) = self.voice_bots.write() {
             guilds.insert(guild.id.get().to_string(), bot_flags);
@@ -870,8 +921,12 @@ impl GatewayState {
         channel_id: Option<String>,
         member_is_bot: bool,
     ) {
-        let is_bot = member_is_bot || self.bot_user_id().as_deref() == Some(user_id);
+        let is_our_bot = self.bot_user_id().as_deref() == Some(user_id);
+        let is_bot = member_is_bot || is_our_bot;
         if let Ok(mut guilds) = self.voice_channels.write() {
+            if is_our_bot {
+                self.update_voice_destination(guild_id, channel_id.as_deref());
+            }
             let users = guilds.entry(guild_id.to_owned()).or_default();
             match channel_id {
                 Some(channel_id) => {
@@ -928,6 +983,7 @@ impl GatewayState {
         }
         if let Ok(mut voice_channels) = self.voice_channels.write() {
             voice_channels.remove(guild_id);
+            self.update_voice_destination(guild_id, None);
         }
         if let Ok(mut voice_bots) = self.voice_bots.write() {
             voice_bots.remove(guild_id);

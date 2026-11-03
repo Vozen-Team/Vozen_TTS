@@ -2,7 +2,7 @@
   "crate": "songbird",
   "version": "0.6.0",
   "source": "https://crates.io/api/v1/crates/songbird/0.6.0/download",
-  "change": "Cargo.toml ringbuf 0.4 -> 0.5.3; source security corrections for event cancellation, unauthenticated RTP/RTCP admission and bounded payload slicing; regressions included.",
+  "change": "Cargo.toml ringbuf 0.4 -> 0.5.3; source security corrections for event cancellation, unauthenticated RTP/RTCP admission bounded payload slicing and cancellation of queued speech when the voice destination changes; regressions included.",
   "originalFiles": {
     ".cargo_vcs_info.json": "f95f4696fe25a5144d38cec5c5cc27dc91d35ec799ad93bc5a7faed05adb5eec",
     "build.rs": "66e6fc51409659a193de07a83605acd7dd8b563247b87d08c936e80138552111",
@@ -122,6 +122,36 @@
     "src/input/codecs/dca/mod.rs": "5fb1834e3428125947f3d3364f4e0a0126ba6a508e6ba39a7724a48b9170aaae"
   },
   "sourceChanges": {
+    "src/handler.rs": [
+      [
+        "    #[cfg(feature = \"driver\")]\n    /// The internal controller of the voice connection monitor thread.\n    driver: Driver,\n\n    guild_id: GuildId,\n    /// Whether the current handler is set to deafen voice connections.\n",
+        "    #[cfg(feature = \"driver\")]\n    /// The internal controller of the voice connection monitor thread.\n    driver: Driver,\n    #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n    stop_queue_on_voice_change: bool,\n\n    guild_id: GuildId,\n    /// Whether the current handler is set to deafen voice connections.\n"
+      ],
+      [
+        "            connection: None,\n            #[cfg(feature = \"driver\")]\n            driver: Driver::new(config),\n            guild_id,\n            self_deaf: false,\n            self_mute: false,\n",
+        "            connection: None,\n            #[cfg(feature = \"driver\")]\n            driver: Driver::new(config),\n            #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n            stop_queue_on_voice_change: false,\n            guild_id,\n            self_deaf: false,\n            self_mute: false,\n"
+      ],
+      [
+        "        self.self_deaf\n    }\n\n    async fn should_actually_join<F, G>(\n        &mut self,\n        completion_generator: F,\n",
+        "        self.self_deaf\n    }\n\n    /// Stops built-in queue tracks before the call leaves or changes channel.\n    #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n    pub fn set_stop_queue_on_voice_change(&mut self, stop: bool) {\n        self.stop_queue_on_voice_change = stop;\n    }\n\n    #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n    fn stop_queue_before_voice_change(&self) {\n        if self.stop_queue_on_voice_change {\n            self.driver.queue().stop();\n        }\n    }\n\n    async fn should_actually_join<F, G>(\n        &mut self,\n        completion_generator: F,\n"
+      ],
+      [
+        "                false\n            } else {\n                // not in progress, and/or a channel change.\n                true\n            }\n        } else {\n",
+        "                false\n            } else {\n                // not in progress, and/or a channel change.\n                #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n                self.stop_queue_before_voice_change();\n                true\n            }\n        } else {\n"
+      ],
+      [
+        "    }\n\n    fn leave_local(&mut self) {\n        self.connection = None;\n\n        #[cfg(feature = \"driver\")]\n",
+        "    }\n\n    fn leave_local(&mut self) {\n        #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n        self.stop_queue_before_voice_change();\n        self.connection = None;\n\n        #[cfg(feature = \"driver\")]\n"
+      ],
+      [
+        "\n    fn update_state_inner(&mut self, session_id: String, channel_id: Option<ChannelId>) {\n        if let Some(channel_id) = channel_id {\n            let try_conn = if let Some((ref mut progress, _)) = self.connection.as_mut() {\n                progress.apply_state_update(session_id, channel_id)\n            } else {\n",
+        "\n    fn update_state_inner(&mut self, session_id: String, channel_id: Option<ChannelId>) {\n        if let Some(channel_id) = channel_id {\n            #[cfg(all(feature = \"driver\", feature = \"builtin-queue\"))]\n            if self\n                .current_channel()\n                .is_some_and(|current| current != channel_id)\n            {\n                self.stop_queue_before_voice_change();\n            }\n            let try_conn = if let Some((ref mut progress, _)) = self.connection.as_mut() {\n                progress.apply_state_update(session_id, channel_id)\n            } else {\n"
+      ],
+      [
+        "        &mut self.driver\n    }\n}\n",
+        "        &mut self.driver\n    }\n}\n\n#[cfg(all(test, feature = \"driver\", feature = \"builtin-queue\"))]\nmod voice_queue_tests {\n    use super::*;\n    use crate::{input::RawAdapter, tracks::Track};\n    use std::{io::Cursor, num::NonZeroU64};\n\n    fn silence() -> Track {\n        Track::new(RawAdapter::new(Cursor::new(vec![0u8; 192_000]), 48_000, 1).into())\n    }\n\n    #[tokio::test]\n    async fn bound_queue_stops_on_gateway_move_and_disconnect() {\n        let id = NonZeroU64::new(1).unwrap();\n        let other = NonZeroU64::new(2).unwrap();\n        let mut call = Call::standalone(id, id);\n        call.set_stop_queue_on_voice_change(true);\n        let (info, received) = flume::unbounded();\n        call.connection = Some((\n            ConnectionProgress::new(id.into(), id.into(), id.into()),\n            Return::Info(info),\n        ));\n        call.update_server(String::new(), String::new());\n        call.update_state(\"session\".into(), Some(id));\n        assert_eq!(received.try_recv().unwrap().channel_id, id.into());\n        call.driver.enqueue_with_preload(silence(), None);\n        call.update_state(\"session\".into(), Some(id));\n        assert_eq!(call.driver.queue().len(), 1);\n\n        call.update_state(\"session\".into(), Some(other));\n        assert_eq!(call.current_channel(), Some(other.into()));\n        assert!(call.driver.queue().is_empty());\n        call.driver.enqueue_with_preload(silence(), None);\n        call.update_state(\"session\".into(), None::<NonZeroU64>);\n        assert!(call.current_channel().is_none());\n        assert!(call.driver.queue().is_empty());\n    }\n}\n"
+      ]
+    ],
     "src/events/store.rs": [
       [
         "if evt.event == new_evt_type {",
