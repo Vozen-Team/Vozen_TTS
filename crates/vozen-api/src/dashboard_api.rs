@@ -173,6 +173,15 @@ async fn bot_profile_access(
     authorize(state, bearer, guild_id).await
 }
 
+fn can_edit_bot_profile_images(state: &DashboardState, guild_id: &str) -> Option<bool> {
+    state
+        .store
+        .lock()
+        .ok()?
+        .is_guild_premium(guild_id, now_ms())
+        .ok()
+}
+
 async fn get_bot_profile(
     State(state): State<DashboardState>,
     Path(guild_id): Path<String>,
@@ -188,8 +197,14 @@ async fn get_bot_profile(
             &state,
         );
     };
+    let Some(can_edit_images) = can_edit_bot_profile_images(&state, &guild_id) else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &state);
+    };
     match profile.read(&guild_id).await {
-        Ok(profile) => json_response(StatusCode::OK, profile, &state),
+        Ok(mut profile) => {
+            profile["canEditImages"] = json!(can_edit_images);
+            json_response(StatusCode::OK, profile, &state)
+        }
         Err(cause) => {
             let (status, code) = cause.response();
             error(status, code, &state)
@@ -227,6 +242,13 @@ async fn save_bot_profile(
         Ok(edit) => edit,
         Err(_) => return error(StatusCode::BAD_REQUEST, "bad_json", &state),
     };
+    if edit.changes_images() {
+        match can_edit_bot_profile_images(&state, &guild_id) {
+            Some(true) => {}
+            Some(false) => return error(StatusCode::FORBIDDEN, "premium_required", &state),
+            None => return error(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &state),
+        }
+    }
     match profile.update(&guild_id, edit).await {
         Ok(profile) => json_response(StatusCode::OK, profile, &state),
         Err(cause) => {
@@ -654,11 +676,15 @@ fn client_ip(headers: &HeaderMap) -> String {
         .to_owned()
 }
 
-fn rate_limited(state: &DashboardState, headers: &HeaderMap) -> bool {
-    let now = SystemTime::now()
+fn now_ms() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+fn rate_limited(state: &DashboardState, headers: &HeaderMap) -> bool {
+    let now = now_ms();
     let Ok(mut rate) = state.rate.lock() else {
         return true;
     };
@@ -835,6 +861,78 @@ mod tests {
             let res = check(method, uri, token, source).await.unwrap();
             assert_eq!(res.status(), status);
             assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
+        }
+    }
+
+    #[tokio::test]
+    async fn bot_profile_images_require_active_guild_premium() {
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        let origin = "https://bot.example.com";
+        let app = dashboard_router(DashboardApiConfig {
+            origin: origin.into(),
+            store: Arc::clone(&store),
+            authorizer: Arc::new(Auth),
+            options: Arc::new(Options),
+            bot_profile: DiscordBotProfile::new("test-fixture", || None),
+        })
+        .unwrap();
+        let uri = format!("/api/dashboard/guild/{GUILD}/bot-profile");
+        let post = |body: &str| {
+            let mut req = request(Method::POST, &uri, Some("good"), body);
+            req.headers_mut()
+                .insert(header::ORIGIN, HeaderValue::from_static(origin));
+            app.clone().oneshot(req)
+        };
+        // Invalid edits expose the validation boundary without contacting Discord.
+        let now = now_ms();
+        for (plan, expected) in [
+            ("free", StatusCode::FORBIDDEN),
+            ("plus", StatusCode::FORBIDDEN),
+            ("expired", StatusCode::FORBIDDEN),
+            ("premium", StatusCode::BAD_REQUEST),
+        ] {
+            match plan {
+                "plus" => {
+                    store
+                        .lock()
+                        .unwrap()
+                        .grant_user_premium(CHANNEL, 1, "fixture", now)
+                        .unwrap();
+                }
+                "expired" => {
+                    store
+                        .lock()
+                        .unwrap()
+                        .grant_guild_premium(GUILD, 1, "fixture", now - 2 * 24 * 60 * 60 * 1_000)
+                        .unwrap();
+                }
+                "premium" => {
+                    store
+                        .lock()
+                        .unwrap()
+                        .grant_guild_premium(GUILD, 1, "fixture", now)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            for body in [
+                r#"{"avatar":"invalid","nick":"Vozen QA"}"#,
+                r#"{"banner":"invalid"}"#,
+                r#"{"reset":true,"nick":"invalid combination"}"#,
+            ] {
+                assert_eq!(
+                    post(body).await.unwrap().status(),
+                    expected,
+                    "{plan}: {body}"
+                );
+            }
+            let invalid_name = post(r#"{"nick":" "}"#).await.unwrap();
+            assert_eq!(invalid_name.status(), StatusCode::BAD_REQUEST, "{plan}");
+            let body = to_bytes(invalid_name.into_body(), 512).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["error"],
+                "invalid_name"
+            );
         }
     }
 

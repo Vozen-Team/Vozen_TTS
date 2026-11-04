@@ -128,6 +128,10 @@ fn profile_fields(member: &Value) -> Value {
 }
 
 impl ProfileEdit {
+    pub(super) fn changes_images(&self) -> bool {
+        self.reset || self.avatar.is_some() || self.banner.is_some()
+    }
+
     fn into_patch(self) -> Result<Value, ProfileError> {
         let mut patch = Map::new();
         if self.reset {
