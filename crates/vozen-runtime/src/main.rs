@@ -3078,7 +3078,13 @@ fn build_http_router(
                 move |guild_id| authorization_state.bot_has_guild(guild_id),
             )
             .map_err(|_| RuntimeError::OAuthClient)?;
+            let profile_gateway = gateway_state.clone();
+            let bot_profile = vozen_api::bot_profile::DiscordBotProfile::new(
+                &runtime_options.bot_token,
+                move || profile_gateway.bot_user_id(),
+            );
             Ok::<DashboardApiConfig, RuntimeError>(DashboardApiConfig {
+                bot_profile,
                 origin: config.origin.clone(),
                 store: store.clone(),
                 authorizer: Arc::new(authorizer),

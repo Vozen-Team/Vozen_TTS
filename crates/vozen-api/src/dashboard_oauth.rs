@@ -378,6 +378,7 @@ mod tests {
                 store: store.clone(),
                 authorizer: Arc::new(auth),
                 options: Arc::new(EmptyOptions),
+                bot_profile: None,
             })
             .unwrap();
         *http.oauth.lock().unwrap() = Err(DashboardDiscordError::Unavailable);
@@ -668,6 +669,7 @@ mod tests {
             store: store.clone(),
             authorizer: Arc::new(auth),
             options: Arc::new(EmptyOptions),
+            bot_profile: None,
         })
         .unwrap();
         *http.guilds.lock().unwrap() = json!([{"id":guild,"permissions":"0","owner":false}]);

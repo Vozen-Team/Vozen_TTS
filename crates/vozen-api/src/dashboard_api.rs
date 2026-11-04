@@ -23,6 +23,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use vozen_store::{ChannelProfile, ChannelProfilePatch, GuildConfig, SqliteStore};
 
+use crate::bot_profile::{DiscordBotProfile, MAX_PROFILE_BODY, ProfileEdit};
 use crate::dashboard_validation::{
     ChannelProfileValidationOptions, InvalidChannelProfile, InvalidDashboardSetting,
     SanitizeChannelProfilePatch, SanitizeDashboardPatch, sanitize_channel_profile_patch,
@@ -93,6 +94,7 @@ pub struct DashboardApiConfig {
     pub store: Arc<Mutex<SqliteStore>>,
     pub authorizer: Arc<dyn DashboardAuthorizer>,
     pub options: Arc<dyn DashboardOptionsProvider>,
+    pub bot_profile: Option<DiscordBotProfile>,
 }
 
 #[derive(Clone)]
@@ -101,6 +103,7 @@ struct DashboardState {
     store: Arc<Mutex<SqliteStore>>,
     authorizer: Arc<dyn DashboardAuthorizer>,
     options: Arc<dyn DashboardOptionsProvider>,
+    bot_profile: Option<DiscordBotProfile>,
     rate: Arc<Mutex<HashMap<String, RateState>>>,
 }
 
@@ -131,6 +134,7 @@ pub fn dashboard_router(config: DashboardApiConfig) -> Result<Router, DashboardA
         store: config.store,
         authorizer: config.authorizer,
         options: config.options,
+        bot_profile: config.bot_profile,
         rate: Arc::new(Mutex::new(HashMap::new())),
     };
     Ok(Router::new()
@@ -143,7 +147,93 @@ pub fn dashboard_router(config: DashboardApiConfig) -> Result<Router, DashboardA
             "/api/dashboard/guild/{guild_id}/profile/{channel_id}",
             post(save_profile).delete(delete_profile).options(preflight),
         )
+        .route(
+            "/api/dashboard/guild/{guild_id}/bot-profile",
+            get(get_bot_profile)
+                .post(save_bot_profile)
+                .options(preflight),
+        )
         .with_state(state))
+}
+
+async fn bot_profile_access(
+    state: &DashboardState,
+    headers: &HeaderMap,
+    guild_id: &str,
+) -> Result<(), Response> {
+    if rate_limited(state, headers) {
+        return Err(error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", state));
+    }
+    let Some(bearer) = bearer_token(headers) else {
+        return Err(error(StatusCode::UNAUTHORIZED, "no_token", state));
+    };
+    if !valid_discord_id(guild_id) {
+        return Err(error(StatusCode::BAD_REQUEST, "bad_guild", state));
+    }
+    authorize(state, bearer, guild_id).await
+}
+
+async fn get_bot_profile(
+    State(state): State<DashboardState>,
+    Path(guild_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = bot_profile_access(&state, &headers, &guild_id).await {
+        return response;
+    }
+    let Some(profile) = &state.bot_profile else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "profile_unavailable",
+            &state,
+        );
+    };
+    match profile.read(&guild_id).await {
+        Ok(profile) => json_response(StatusCode::OK, profile, &state),
+        Err(cause) => {
+            let (status, code) = cause.response();
+            error(status, code, &state)
+        }
+    }
+}
+
+async fn save_bot_profile(
+    State(state): State<DashboardState>,
+    Path(guild_id): Path<String>,
+    request: Request,
+) -> Response {
+    let headers = request.headers();
+    if headers.get(header::ORIGIN) != Some(&state.origin) {
+        return error(StatusCode::FORBIDDEN, "bad_origin", &state);
+    }
+    if let Err(response) = bot_profile_access(&state, headers, &guild_id).await {
+        return response;
+    }
+    let Some(profile) = &state.bot_profile else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "profile_unavailable",
+            &state,
+        );
+    };
+    let Ok(_permit) = profile.uploads.try_acquire() else {
+        return error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", &state);
+    };
+    let body = match to_bytes(request.into_body(), MAX_PROFILE_BODY).await {
+        Ok(body) => body,
+        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "too_large", &state),
+    };
+    let edit: ProfileEdit = match serde_json::from_slice(&body) {
+        Ok(edit) => edit,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "bad_json", &state),
+    };
+    match profile.update(&guild_id, edit).await {
+        Ok(profile) => json_response(StatusCode::OK, profile, &state),
+        Err(cause) => {
+            let (status, code) = cause.response();
+            error(status, code, &state)
+        }
+    }
 }
 
 async fn list_guilds(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
@@ -689,9 +779,65 @@ mod tests {
             store: Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store"))),
             authorizer: Arc::new(Auth),
             options: Arc::new(Options),
+            bot_profile: None,
         })
         .expect("router")
     }
+    #[tokio::test]
+    async fn bot_profile_requires_guild_access_and_an_exact_write_origin() {
+        let app = app();
+        let own = format!("/api/dashboard/guild/{GUILD}/bot-profile");
+        let other = format!("/api/dashboard/guild/{CHANNEL}/bot-profile");
+        let check = |method, uri: &str, token, origin| {
+            let mut req = request(method, uri, token, r#"{"reset":true}"#);
+            req.headers_mut()
+                .insert(header::ORIGIN, HeaderValue::from_static(origin));
+            app.clone().oneshot(req)
+        };
+        let origin = "https://bot.example.com";
+        for (method, uri, token, source, status) in [
+            (
+                Method::GET,
+                own.as_str(),
+                None,
+                origin,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Method::GET,
+                other.as_str(),
+                Some("good"),
+                origin,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Method::POST,
+                own.as_str(),
+                Some("good"),
+                "https://other.example.com",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Method::POST,
+                other.as_str(),
+                Some("good"),
+                origin,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Method::POST,
+                own.as_str(),
+                Some("good"),
+                origin,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let res = check(method, uri, token, source).await.unwrap();
+            assert_eq!(res.status(), status);
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
+        }
+    }
+
     fn request(method: Method, uri: &str, token: Option<&str>, body: &str) -> Request<Body> {
         let mut builder = Request::builder().method(method).uri(uri);
         if let Some(token) = token {

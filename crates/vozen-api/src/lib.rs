@@ -12,6 +12,7 @@ pub mod account_api;
 pub mod admin_api;
 pub mod admin_auth;
 pub mod admin_router;
+pub mod bot_profile;
 pub mod dashboard_api;
 pub mod dashboard_oauth;
 pub mod dashboard_validation;
