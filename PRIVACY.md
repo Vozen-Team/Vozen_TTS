@@ -56,6 +56,8 @@ Note on opt-out: running `/voice optout` **creates** a record with your `user_id
 
 ### 1.1 Website login (vozen.org)
 
+The server dashboard shows its five highest TTS message counts and five current member streaks to people with permission to manage that server. It uses existing `talk_stats` counters. Discord display names are resolved for the ranked members at request time and are not stored for this feature.
+
 When you log in on **vozen.org** with Discord (the account page and the server dashboard), Vozen uses Discord OAuth2 and requests only:
 
 - **`identify`** — your Discord ID, username and avatar, to show your account and to verify that a request is really yours.

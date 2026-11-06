@@ -282,6 +282,14 @@ impl RuntimeDashboardOptionsProvider {
 
 #[async_trait::async_trait]
 impl DashboardOptionsProvider for RuntimeDashboardOptionsProvider {
+    async fn guild_member_names(
+        &self,
+        guild_id: &str,
+        user_ids: &[String],
+    ) -> HashMap<String, String> {
+        self.discord.guild_member_names(guild_id, user_ids).await
+    }
+
     async fn options_for_guild(
         &self,
         guild_id: &str,

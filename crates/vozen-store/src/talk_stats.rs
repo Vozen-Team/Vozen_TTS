@@ -180,12 +180,48 @@ impl SqliteStore {
         local_day: &str,
         limit: usize,
     ) -> Result<Vec<TalkRow>, StoreError> {
+        let mut rows = self.talk_rows(guild_id, local_day)?;
+        rows.sort_unstable_by(by_message_count);
+        rows.truncate(limit);
+        Ok(rows)
+    }
+
+    /// Returns the union of the top entries for messages and current streaks in one guild.
+    pub fn talk_leaderboard(
+        &self,
+        guild_id: &str,
+        local_day: &str,
+        limit: usize,
+    ) -> Result<Vec<TalkRow>, StoreError> {
+        let mut rows = self.talk_rows(guild_id, local_day)?;
+        rows.retain(|row| row.count > 0);
+        rows.sort_unstable_by(by_message_count);
+        let mut entries: Vec<_> = rows.iter().take(limit).cloned().collect();
+        rows.sort_unstable_by(|left, right| {
+            right
+                .streak
+                .cmp(&left.streak)
+                .then_with(|| by_message_count(left, right))
+        });
+        for row in rows
+            .into_iter()
+            .take_while(|row| row.streak > 0)
+            .take(limit)
+        {
+            if !entries.iter().any(|entry| entry.user_id == row.user_id) {
+                entries.push(row);
+            }
+        }
+        Ok(entries)
+    }
+
+    fn talk_rows(&self, guild_id: &str, local_day: &str) -> Result<Vec<TalkRow>, StoreError> {
         let day = parse_day(local_day)?;
         let mut statement = self.connection().prepare(
             "SELECT user_id, spoken_count, streak, best_streak, last_date
              FROM talk_stats WHERE guild_id = ?1",
         )?;
-        let mut rows = statement
+        let rows = statement
             .query_map([guild_id], |row| {
                 let last_date: String = row.get(4)?;
                 let stored_streak: i64 = row.get(2)?;
@@ -197,14 +233,6 @@ impl SqliteStore {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        rows.sort_by(|left, right| {
-            right
-                .count
-                .cmp(&left.count)
-                .then_with(|| right.streak.cmp(&left.streak))
-                .then_with(|| left.user_id.cmp(&right.user_id))
-        });
-        rows.truncate(limit);
         Ok(rows)
     }
 
@@ -224,6 +252,14 @@ impl SqliteStore {
             .unwrap_or(1)
             .max(1))
     }
+}
+
+fn by_message_count(left: &TalkRow, right: &TalkRow) -> std::cmp::Ordering {
+    right
+        .count
+        .cmp(&left.count)
+        .then_with(|| right.streak.cmp(&left.streak))
+        .then_with(|| left.user_id.cmp(&right.user_id))
 }
 
 fn parse_day(day: &str) -> Result<Date, StoreError> {
@@ -373,5 +409,34 @@ mod tests {
             store.bump_talk("guild", "user", "not-a-day"),
             Err(StoreError::InvalidTalkStatsDay)
         ));
+    }
+
+    #[test]
+    fn leaderboard_combines_distinct_winners_and_keeps_expired_streaks_at_zero() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        for _ in 0..6 {
+            store
+                .bump_talk("guild", "most-messages", "2026-07-15")
+                .unwrap();
+            store.bump_talk("other", "outside", "2026-07-22").unwrap();
+        }
+        for day in ["2026-07-20", "2026-07-21", "2026-07-22"] {
+            store.bump_talk("guild", "longest-streak", day).unwrap();
+        }
+        store.bump_talk("guild", "one-day", "2026-07-22").unwrap();
+        let rows = store.talk_leaderboard("guild", "2026-07-22", 1).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.user_id.as_str(), row.count, row.streak))
+                .collect::<Vec<_>>(),
+            [("most-messages", 6, 0), ("longest-streak", 3, 3)]
+        );
+        let rows = store.talk_leaderboard("guild", "2026-07-22", 2).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.user_id.as_str())
+                .collect::<Vec<_>>(),
+            ["most-messages", "longest-streak", "one-day"]
+        );
     }
 }

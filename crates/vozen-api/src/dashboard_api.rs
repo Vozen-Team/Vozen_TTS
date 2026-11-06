@@ -21,7 +21,7 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use vozen_store::{ChannelProfile, ChannelProfilePatch, GuildConfig, SqliteStore};
+use vozen_store::{ChannelProfile, ChannelProfilePatch, GuildConfig, SqliteStore, utc_day_key};
 
 use crate::bot_profile::{DiscordBotProfile, MAX_PROFILE_BODY, ProfileEdit};
 use crate::dashboard_validation::{
@@ -87,6 +87,14 @@ pub trait DashboardOptionsProvider: Send + Sync {
         &self,
         guild_id: &str,
     ) -> Result<DashboardOptions, DashboardOptionsError>;
+
+    async fn guild_member_names(
+        &self,
+        _guild_id: &str,
+        _user_ids: &[String],
+    ) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
 
 pub struct DashboardApiConfig {
@@ -492,11 +500,28 @@ async fn build_payload(
     state: &DashboardState,
     guild_id: &str,
 ) -> Result<Value, DashboardOptionsError> {
-    build_payload_with_options(
+    let mut payload = build_payload_with_options(
         state,
         guild_id,
         state.options.options_for_guild(guild_id).await?,
-    )
+    )?;
+    let rows = state
+        .store
+        .lock()
+        .ok()
+        .and_then(|store| store.talk_leaderboard(guild_id, &utc_day_key(), 5).ok());
+    if let Some(rows) = rows {
+        let ids: Vec<_> = rows.iter().map(|row| row.user_id.clone()).collect();
+        let names = state.options.guild_member_names(guild_id, &ids).await;
+        let entries: Vec<_> = rows
+            .into_iter()
+            .map(|row| {
+                json!({"name": names.get(&row.user_id), "count": row.count, "streak": row.streak})
+            })
+            .collect();
+        payload["leaderboard"] = json!({"entries": entries});
+    }
+    Ok(payload)
 }
 
 fn build_payload_with_options(
@@ -775,6 +800,19 @@ mod tests {
     struct Options;
     #[async_trait]
     impl DashboardOptionsProvider for Options {
+        async fn guild_member_names(
+            &self,
+            guild_id: &str,
+            user_ids: &[String],
+        ) -> HashMap<String, String> {
+            assert_eq!(guild_id, GUILD);
+            user_ids
+                .iter()
+                .filter(|id| id.as_str() == CHANNEL)
+                .map(|id| (id.clone(), "Guild nickname".into()))
+                .collect()
+        }
+
         async fn options_for_guild(
             &self,
             _guild_id: &str,
@@ -797,6 +835,53 @@ mod tests {
                 }],
                 ..DashboardOptions::default()
             })
+        }
+    }
+
+    #[tokio::test]
+    async fn leaderboard_uses_guild_scoped_counts_and_exposes_no_member_ids() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let today = utc_day_key();
+        store.bump_talk(GUILD, CHANNEL, &today).unwrap();
+        store
+            .bump_talk(GUILD, "777777777777777777", "2000-01-01")
+            .unwrap();
+        store.bump_talk(CHANNEL, CHANNEL, &today).unwrap();
+        let app = dashboard_router(DashboardApiConfig {
+            origin: "https://bot.example.com".into(),
+            store: Arc::new(Mutex::new(store)),
+            authorizer: Arc::new(Auth),
+            options: Arc::new(Options),
+            bot_profile: None,
+        })
+        .unwrap();
+        let own = format!("/api/dashboard/guild/{GUILD}");
+        let other = format!("/api/dashboard/guild/{CHANNEL}");
+        for (uri, token, expected) in [
+            (own.as_str(), None, StatusCode::UNAUTHORIZED),
+            (other.as_str(), Some("good"), StatusCode::FORBIDDEN),
+            (own.as_str(), Some("good"), StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(Method::GET, uri, token, ""))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = to_bytes(response.into_body(), 32_768).await.unwrap();
+            let json: Value = serde_json::from_slice(&body).unwrap();
+            if expected == StatusCode::OK {
+                assert_eq!(
+                    json["leaderboard"],
+                    json!({"entries": [
+                        {"name": "Guild nickname", "count": 1, "streak": 1},
+                        {"name": null, "count": 1, "streak": 0},
+                    ]})
+                );
+            } else {
+                assert!(json.get("leaderboard").is_none());
+            }
         }
     }
     fn app() -> Router {
