@@ -4,7 +4,13 @@
 //! authorization boundary. It fails closed when READY, the bot member, or any Discord response
 //! is unavailable, and it retains no guild/member cache between browser requests.
 
-use serenity::model::{Permissions, channel::ChannelType, id::GuildId};
+use std::{collections::HashMap, num::NonZeroU64, time::Duration};
+
+use serenity::model::{
+    Permissions,
+    channel::ChannelType,
+    id::{GuildId, UserId},
+};
 
 use crate::{GatewayState, RejoinChannelState};
 
@@ -31,6 +37,46 @@ pub struct DiscordDashboardOptionsProvider {
 impl DiscordDashboardOptionsProvider {
     pub fn new(gateway_state: GatewayState) -> Self {
         Self { gateway_state }
+    }
+
+    pub async fn guild_member_names(
+        &self,
+        guild_id: &str,
+        user_ids: &[String],
+    ) -> HashMap<String, String> {
+        let mut names = HashMap::new();
+        let (Ok(guild_id), Some(http)) = (
+            guild_id.parse::<NonZeroU64>(),
+            self.gateway_state.discord_http(),
+        ) else {
+            return names;
+        };
+        let guild_id = GuildId::new(guild_id.get());
+        let mut lookups = tokio::task::JoinSet::new();
+        for id in user_ids {
+            let Ok(user_id) = id.parse::<NonZeroU64>() else {
+                continue;
+            };
+            let http = http.clone();
+            let id = id.clone();
+            lookups.spawn(async move {
+                let member = guild_id
+                    .member(&http, UserId::new(user_id.get()))
+                    .await
+                    .ok()?;
+                Some((id, member.display_name().to_owned()))
+            });
+        }
+        // Names are optional. Keep the guild dashboard usable if Discord is slow or unavailable.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(result) = lookups.join_next().await {
+                if let Ok(Some((id, name))) = result {
+                    names.insert(id, name);
+                }
+            }
+        })
+        .await;
+        names
     }
 
     pub async fn options_for_guild(&self, guild_id: &str) -> Option<DiscordDashboardOptions> {
