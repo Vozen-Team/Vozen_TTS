@@ -80,6 +80,11 @@ pub enum DashboardOptionsError {
     Unavailable,
 }
 
+pub struct DashboardMemberProfile {
+    pub name: String,
+    pub avatar_url: String,
+}
+
 /// Data obtained from the live Discord client only after authorization. Errors fail closed.
 #[async_trait]
 pub trait DashboardOptionsProvider: Send + Sync {
@@ -88,11 +93,11 @@ pub trait DashboardOptionsProvider: Send + Sync {
         guild_id: &str,
     ) -> Result<DashboardOptions, DashboardOptionsError>;
 
-    async fn guild_member_names(
+    async fn guild_member_profiles(
         &self,
         _guild_id: &str,
         _user_ids: &[String],
-    ) -> HashMap<String, String> {
+    ) -> HashMap<String, DashboardMemberProfile> {
         HashMap::new()
     }
 }
@@ -512,11 +517,17 @@ async fn build_payload(
         .and_then(|store| store.talk_leaderboard(guild_id, &utc_day_key(), 5).ok());
     if let Some(rows) = rows {
         let ids: Vec<_> = rows.iter().map(|row| row.user_id.clone()).collect();
-        let names = state.options.guild_member_names(guild_id, &ids).await;
+        let profiles = state.options.guild_member_profiles(guild_id, &ids).await;
         let entries: Vec<_> = rows
             .into_iter()
             .map(|row| {
-                json!({"name": names.get(&row.user_id), "count": row.count, "streak": row.streak})
+                let profile = profiles.get(&row.user_id);
+                json!({
+                    "name": profile.map(|profile| &profile.name),
+                    "avatar": profile.map(|profile| &profile.avatar_url),
+                    "count": row.count,
+                    "streak": row.streak,
+                })
             })
             .collect();
         payload["leaderboard"] = json!({"entries": entries});
@@ -800,16 +811,24 @@ mod tests {
     struct Options;
     #[async_trait]
     impl DashboardOptionsProvider for Options {
-        async fn guild_member_names(
+        async fn guild_member_profiles(
             &self,
             guild_id: &str,
             user_ids: &[String],
-        ) -> HashMap<String, String> {
+        ) -> HashMap<String, DashboardMemberProfile> {
             assert_eq!(guild_id, GUILD);
             user_ids
                 .iter()
                 .filter(|id| id.as_str() == CHANNEL)
-                .map(|id| (id.clone(), "Guild nickname".into()))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        DashboardMemberProfile {
+                            name: "Guild nickname".into(),
+                            avatar_url: "https://cdn.discordapp.com/embed/avatars/0.png".into(),
+                        },
+                    )
+                })
                 .collect()
         }
 
@@ -839,7 +858,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn leaderboard_uses_guild_scoped_counts_and_exposes_no_member_ids() {
+    async fn leaderboard_returns_only_guild_scoped_display_data() {
         let store = SqliteStore::open_in_memory().unwrap();
         let today = utc_day_key();
         store.bump_talk(GUILD, CHANNEL, &today).unwrap();
@@ -875,8 +894,8 @@ mod tests {
                 assert_eq!(
                     json["leaderboard"],
                     json!({"entries": [
-                        {"name": "Guild nickname", "count": 1, "streak": 1},
-                        {"name": null, "count": 1, "streak": 0},
+                        {"name": "Guild nickname", "avatar": "https://cdn.discordapp.com/embed/avatars/0.png", "count": 1, "streak": 1},
+                        {"name": null, "avatar": null, "count": 1, "streak": 0},
                     ]})
                 );
             } else {

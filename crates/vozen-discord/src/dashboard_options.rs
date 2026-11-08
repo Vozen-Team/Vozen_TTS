@@ -20,6 +20,11 @@ pub struct DiscordDashboardOption {
     pub label: String,
 }
 
+pub struct DiscordDashboardMember {
+    pub name: String,
+    pub avatar_url: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscordDashboardOptions {
     pub channels: Vec<DiscordDashboardOption>,
@@ -39,17 +44,17 @@ impl DiscordDashboardOptionsProvider {
         Self { gateway_state }
     }
 
-    pub async fn guild_member_names(
+    pub async fn guild_member_profiles(
         &self,
         guild_id: &str,
         user_ids: &[String],
-    ) -> HashMap<String, String> {
-        let mut names = HashMap::new();
+    ) -> HashMap<String, DiscordDashboardMember> {
+        let mut profiles = HashMap::new();
         let (Ok(guild_id), Some(http)) = (
             guild_id.parse::<NonZeroU64>(),
             self.gateway_state.discord_http(),
         ) else {
-            return names;
+            return profiles;
         };
         let guild_id = GuildId::new(guild_id.get());
         let mut lookups = tokio::task::JoinSet::new();
@@ -64,19 +69,25 @@ impl DiscordDashboardOptionsProvider {
                     .member(&http, UserId::new(user_id.get()))
                     .await
                     .ok()?;
-                Some((id, member.display_name().to_owned()))
+                Some((
+                    id,
+                    DiscordDashboardMember {
+                        name: member.display_name().to_owned(),
+                        avatar_url: member.face().replace("?size=1024", "?size=64"),
+                    },
+                ))
             });
         }
-        // Names are optional. Keep the guild dashboard usable if Discord is slow or unavailable.
+        // Keep the guild dashboard usable if Discord is slow or unavailable.
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
             while let Some(result) = lookups.join_next().await {
-                if let Ok(Some((id, name))) = result {
-                    names.insert(id, name);
+                if let Ok(Some((id, profile))) = result {
+                    profiles.insert(id, profile);
                 }
             }
         })
         .await;
-        names
+        profiles
     }
 
     pub async fn options_for_guild(&self, guild_id: &str) -> Option<DiscordDashboardOptions> {
