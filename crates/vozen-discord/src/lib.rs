@@ -262,8 +262,8 @@ pub use core_voice_service::{
     CoreVoiceService, CoreVoiceSettings,
 };
 pub use dashboard_options::{
-    DiscordDashboardOption, DiscordDashboardOptions, DiscordDashboardOptionsProvider,
-    locale_display_options, voice_display_options,
+    DiscordDashboardMember, DiscordDashboardOption, DiscordDashboardOptions,
+    DiscordDashboardOptionsProvider, locale_display_options, voice_display_options,
 };
 pub use explicit_translation::{
     ExplicitTranslationInvocation, ExplicitTranslationOutcome, ExplicitTranslationProvider,
