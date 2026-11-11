@@ -254,8 +254,7 @@ impl SqliteStore {
             .prepare(&format!("SELECT * FROM \"{table}\""))?;
         let column_names = statement
             .column_names()
-            .iter()
-            .map(|name| (*name).to_owned())
+            .map(str::to_owned)
             .collect::<Vec<_>>();
         let mut rows = statement.query([])?;
         let mut result = Vec::new();

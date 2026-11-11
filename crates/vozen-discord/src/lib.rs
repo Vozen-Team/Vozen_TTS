@@ -1161,13 +1161,28 @@ fn system_now_ms() -> i64 {
 }
 
 async fn run_gateway_watch(gateway_state: GatewayState, shard_manager: Arc<ShardManager>) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_millis(
-        gateway_watch::CHECK_INTERVAL_MS as u64,
-    ));
+    let check_interval = std::time::Duration::from_millis(gateway_watch::CHECK_INTERVAL_MS as u64);
+    let mut interval = tokio::time::interval(check_interval);
+    let mut last_tick = std::time::Instant::now();
     let mut unhealthy_since_ms = None;
     let mut healthy_ticks = 0_u32;
     loop {
         interval.tick().await;
+        let now = std::time::Instant::now();
+        let tick_lag_ms = now
+            .saturating_duration_since(last_tick)
+            .saturating_sub(check_interval)
+            .as_millis()
+            .min(i64::MAX as u128) as i64;
+        last_tick = now;
+        // Recover before awaiting runner state that may have survived a lost Discord session.
+        if tick_lag_ms > gateway_watch::MAX_TICK_LAG_MS {
+            gateway_state.ready.store(false, Ordering::Release);
+            eprintln!(
+                "[gateway] supervisor tick delayed by {tick_lag_ms}ms; requesting restart after scheduler stall"
+            );
+            return;
+        }
         let live_stages = {
             let runners = shard_manager.runners.lock().await;
             runners
@@ -1181,6 +1196,7 @@ async fn run_gateway_watch(gateway_state: GatewayState, shard_manager: Arc<Shard
             unhealthy_since_ms,
             system_now_ms(),
             gateway_watch::MAX_DOWN_MS,
+            tick_lag_ms,
         );
         unhealthy_since_ms = decision.unhealthy_since_ms;
         if decision.healthy {
@@ -1587,12 +1603,14 @@ mod tests {
             None,
             1_000,
             gateway_watch::MAX_DOWN_MS,
+            0,
         );
         let expired = gateway_watch::evaluate_gateway(
             state.is_ready(),
             first.unhealthy_since_ms,
             121_001,
             gateway_watch::MAX_DOWN_MS,
+            0,
         );
         assert!(expired.should_restart);
     }
