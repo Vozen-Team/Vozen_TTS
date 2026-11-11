@@ -1,0 +1,16 @@
+[package]
+name = "vozen-entitlementd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+vozen-api = { path = "../vozen-api" }
+vozen-store = { path = "../vozen-store" }
+
+[lints]
+workspace = true
