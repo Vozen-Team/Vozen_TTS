@@ -2819,11 +2819,19 @@ async fn run() -> Result<(), RuntimeError> {
         }
     };
     let bot_token = config.discord_token.clone();
-    let gateway = run_discord_gateway_with_state_and_sink(
-        DiscordRuntimeConfig::from_token(config.discord_token)?,
-        gateway_state.clone(),
-        event_sink,
-    );
+    let gateway_config = DiscordRuntimeConfig::from_token(config.discord_token)?;
+    let gateway = async {
+        let result = run_discord_gateway_with_state_and_sink(
+            gateway_config,
+            gateway_state.clone(),
+            event_sink,
+        )
+        .await;
+        if matches!(result, Err(DiscordRuntimeError::GatewayWatchdogRestart)) {
+            write_current_rejoin_marker(&gateway_state, planned_rejoin_marker.as_deref());
+        }
+        result
+    };
 
     let Some(health_bind) = config.health_bind else {
         if write_rejoin_marker_on_shutdown {
