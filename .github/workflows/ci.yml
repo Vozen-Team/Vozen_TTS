@@ -149,6 +149,16 @@ jobs:
           docker logs "$container"
           echo "runtime image smoke test did not become ready" >&2
           exit 1
+      - name: Verify packaged speech dependencies as the runtime user
+        run: |
+          docker run --rm --read-only --network none --entrypoint sh "vozen-rust:$GITHUB_SHA" -ec '
+            test "$(id -u)" = 1000
+            test -r /app/tools/kokoro-v1.0.onnx
+            test -r /app/tools/voices-v1.0.bin
+            /app/tools/kokoro-venv/bin/python -c "from kokoro_onnx import Kokoro; Kokoro(\"/app/tools/kokoro-v1.0.onnx\", \"/app/tools/voices-v1.0.bin\")"
+            /app/tools/whisper-venv/bin/python /app/tools/whisper_sidecar.py --help >/dev/null
+            /app/tools/whisper-venv/bin/python -c "from faster_whisper import WhisperModel"
+          '
       - name: Verify production entrypoint remains credential-gated
         shell: bash
         run: |
