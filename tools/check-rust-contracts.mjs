@@ -62,6 +62,13 @@ assert(voiceI18n.schema_version === 1, 'voice response contract schema must be v
 assert(voiceI18n.default_locale === 'en', 'voice response contract must default to English');
 assertUnique(voiceI18n.supported_locales, 'voice response locales');
 assertUnique(voiceI18n.keys, 'voice response keys');
+const voicePreferenceSink = readFileSync(
+  resolve(root, 'crates/vozen-runtime/src/voice_preference_sink.rs'),
+  'utf8',
+);
+for (const [, key] of voicePreferenceSink.matchAll(/"(voice\.[a-zA-Z]+(?:\.[a-zA-Z]+)*)"/g)) {
+  assert(voiceI18n.keys.includes(key), `voice response contract is missing runtime key ${key}`);
+}
 for (const locale of voiceI18n.supported_locales) {
   const messages = voiceI18n.messages?.[locale];
   assert(messages, `voice response contract is missing locale ${locale}`);
