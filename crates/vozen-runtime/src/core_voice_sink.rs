@@ -2478,6 +2478,14 @@ impl CoreVoiceGatewaySink {
         Ok(true)
     }
 
+    fn randomizer_modal_acknowledgment(has_source_message: bool) -> CreateInteractionResponse {
+        if has_source_message {
+            CreateInteractionResponse::Acknowledge
+        } else {
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new())
+        }
+    }
+
     async fn handle_randomizer_modal(
         &self,
         context: &Context,
@@ -2515,7 +2523,10 @@ impl CoreVoiceGatewaySink {
             modal.member.as_ref(),
         );
         modal
-            .defer(context)
+            .create_response(
+                context,
+                Self::randomizer_modal_acknowledgment(modal.message.is_some()),
+            )
             .await
             .map_err(|_| GatewayEventDispatchError)?;
         let content = self
@@ -4380,6 +4391,14 @@ fn queue_lane_label(lane: QueueLane) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn randomizer_modal_acknowledges_without_editing_a_missing_source_message() {
+        let slash = CoreVoiceGatewaySink::randomizer_modal_acknowledgment(false);
+        let component = CoreVoiceGatewaySink::randomizer_modal_acknowledgment(true);
+        assert_eq!(serde_json::to_value(slash).unwrap()["type"], 5);
+        assert_eq!(serde_json::to_value(component).unwrap()["type"], 6);
+    }
 
     #[test]
     fn abandoned_picker_insertions_obey_capacity_and_ttl_without_component_activity() {
