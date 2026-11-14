@@ -55,7 +55,7 @@ RUN apt-get update \
   && useradd --system --uid 1000 --create-home --shell /usr/sbin/nologin vozen \
   && mkdir -p /data \
   && mkdir -p /data/huggingface \
-  && chown -R vozen:vozen /data
+  && chown -R vozen:vozen /data /app/tools
 
 ARG KOKORO_RELEASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
 ARG KOKORO_MODEL_SHA256=7D5DF8ECF7D4B1878015A32686053FD0EEBE2BC377234608764CC0EF3636A6C5
@@ -63,15 +63,14 @@ ARG KOKORO_VOICES_SHA256=BCA610B8308E8D99F32E6FE4197E7EC01679264EFED0CAC9140FE9C
 RUN curl --fail --location --retry 3 --output /app/tools/kokoro-v1.0.onnx "$KOKORO_RELEASE/kokoro-v1.0.onnx" \
   && echo "$KOKORO_MODEL_SHA256  /app/tools/kokoro-v1.0.onnx" | sha256sum --check --strict \
   && curl --fail --location --retry 3 --output /app/tools/voices-v1.0.bin "$KOKORO_RELEASE/voices-v1.0.bin" \
-  && echo "$KOKORO_VOICES_SHA256  /app/tools/voices-v1.0.bin" | sha256sum --check --strict
+  && echo "$KOKORO_VOICES_SHA256  /app/tools/voices-v1.0.bin" | sha256sum --check --strict \
+  && chown vozen:vozen /app/tools/kokoro-v1.0.onnx /app/tools/voices-v1.0.bin
 
 COPY --from=builder /app/target/release/vozen-runtime /usr/local/bin/vozen-runtime
 COPY assets/sfx ./assets/sfx
-COPY tools/kokoro_server.py ./tools/kokoro_server.py
-COPY tools/whisper_sidecar.py ./tools/whisper_sidecar.py
+COPY --chown=vozen:vozen tools/kokoro_server.py tools/whisper_sidecar.py ./tools/
 COPY docker/healthcheck-rust.sh /usr/local/bin/healthcheck-rust.sh
-RUN chmod 0755 /usr/local/bin/healthcheck-rust.sh \
-  && chown -R vozen:vozen /app/tools
+RUN chmod 0755 /usr/local/bin/healthcheck-rust.sh
 
 USER vozen
 
