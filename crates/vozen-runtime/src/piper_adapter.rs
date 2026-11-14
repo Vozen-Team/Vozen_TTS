@@ -5,7 +5,11 @@
 //! nor a Piper process diagnostic can reach Discord through a user request. A content-free local
 //! diagnostic remains in the process log so an operator can distinguish synthesis from playback.
 
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use vozen_core::{RuntimeMetrics, SynthRequest, SynthesisEngine};
@@ -42,17 +46,23 @@ impl PiperCommandSynthesizer<CommandPiperRunner> {
         models_dir: impl Into<PathBuf>,
         cache_dir: impl Into<PathBuf>,
         concurrency: usize,
+        timeout: Duration,
     ) -> Self {
-        Self::production_with_metrics(
-            executable,
-            models_dir,
-            cache_dir,
-            concurrency,
-            Arc::new(RuntimeMetrics::default()),
+        let metrics = Arc::new(RuntimeMetrics::default());
+        Self::new_with_metrics(
+            Arc::new(PiperEngine::new_with_metrics(
+                Arc::new(CommandPiperRunner::with_timeout(executable, timeout)),
+                models_dir,
+                cache_dir,
+                concurrency,
+                metrics.clone(),
+            )),
+            metrics,
         )
     }
 
     #[must_use]
+    #[cfg(feature = "voice-driver")]
     pub fn production_with_metrics(
         executable: impl Into<PathBuf>,
         models_dir: impl Into<PathBuf>,
@@ -178,6 +188,37 @@ mod tests {
         assert!(adapter.synthesize(&request()).await.is_err());
         assert_eq!(runner.calls.load(Ordering::Relaxed), 1);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn export_synthesizer_uses_its_own_process_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("vozen-piper-export-timeout-{}", std::process::id()));
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).expect("models directory");
+        std::fs::write(models.join("en_US-amy-medium.onnx"), b"placeholder")
+            .expect("model placeholder");
+        let executable = root.join("piper");
+        std::fs::write(&executable, "#!/bin/sh\nexec sleep 2\n").expect("test executable");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("executable permission");
+        let adapter = PiperCommandSynthesizer::production(
+            executable,
+            &models,
+            root.join("cache"),
+            1,
+            Duration::from_millis(20),
+        );
+
+        let started = Instant::now();
+        let result = adapter.synthesize(&request()).await;
+        let elapsed = started.elapsed();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
     }
 
     #[tokio::test]

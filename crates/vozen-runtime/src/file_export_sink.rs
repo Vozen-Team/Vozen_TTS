@@ -8,6 +8,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serenity::{
@@ -25,6 +26,9 @@ use crate::{
     TtsFileRuntimeOptions, engine_router::PerUserCommandSynthesizer,
     piper_adapter::PiperCommandSynthesizer, system_now_ms,
 };
+
+// A 500-character file can require more than the live playback synthesis budget.
+const EXPORT_SYNTHESIS_TIMEOUT: Duration = Duration::from_secs(25);
 
 async fn take_export_attachment(path: &std::path::Path) -> serenity::Result<CreateAttachment> {
     let attachment = CreateAttachment::path(path).await;
@@ -116,6 +120,7 @@ impl TtsFileGatewaySink {
                 options.models_dir.clone(),
                 options.cache_dir,
                 options.piper_concurrency,
+                EXPORT_SYNTHESIS_TIMEOUT,
             ));
         let localizer = VoiceResponseLocalizer::from_generated_contract()
             .map_err(|_| GatewayEventDispatchError)?;
@@ -192,6 +197,7 @@ impl GatewayEventSink for TtsFileGatewaySink {
                 self.models_dir.clone(),
                 workspace.path.clone(),
                 1,
+                EXPORT_SYNTHESIS_TIMEOUT,
             ));
         let outcome = self
             .service
