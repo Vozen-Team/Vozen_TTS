@@ -117,7 +117,8 @@ jobs:
   # separate from the runtime tests: a Windows/MSVC build can pass while the Debian/Opus image
   # still has a broken Docker context, native dependency or healthcheck asset.
   rust-image:
-    runs-on: ubuntu-latest
+    # The production broker validates the Docker save layout emitted on Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     needs: rust
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
