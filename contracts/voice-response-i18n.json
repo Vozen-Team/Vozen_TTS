@@ -572,7 +572,18 @@
     "wizard.readyTitle",
     "wizard.readyDescription",
     "wizard.readyDescriptionManualJoin",
-    "wizard.readyFooter"
+    "wizard.readyFooter",
+    "voice.config.cancel",
+    "voice.config.cancelled",
+    "voice.config.expired",
+    "voice.config.more",
+    "voice.config.pickEngine",
+    "voice.config.pickLanguage",
+    "voice.config.pickSpeed",
+    "voice.config.pickVoice",
+    "voice.config.save",
+    "voice.config.summary",
+    "voice.config.title"
   ],
   "messages": {
     "en": {
@@ -1108,7 +1119,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Cancel",
+      "voice.config.cancelled": "Setup cancelled — nothing changed.",
+      "voice.config.expired": "Panel expired — run `/voice config` again to continue.",
+      "voice.config.more": "▼ More languages",
+      "voice.config.pickEngine": "Engine…",
+      "voice.config.pickLanguage": "Language…",
+      "voice.config.pickSpeed": "Speed…",
+      "voice.config.pickVoice": "Voice…",
+      "voice.config.save": "Save",
+      "voice.config.summary": "Current selection: **{voice}** · engine **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Voice setup** — pick your options below, then press **Save**. Nothing changes until you do."
     },
     "pt": {
       "speak.emptyMessage": "Essa mensagem não tem texto para ler em voz alta.",
@@ -1643,7 +1665,18 @@
       "wizard.readyTitle": "O Vozen está pronto",
       "wizard.readyDescription": "Entra numa chamada e escreve em {channel}.",
       "wizard.readyDescriptionManualJoin": "Entra numa chamada, usa `/join` e escreve em {channel}.",
-      "wizard.readyFooter": "Escolhe a tua voz com /voice."
+      "wizard.readyFooter": "Escolhe a tua voz com /voice.",
+      "voice.config.cancel": "Cancelar",
+      "voice.config.cancelled": "Configuração cancelada — nada foi alterado.",
+      "voice.config.expired": "Painel expirado — corre `/voice config` outra vez para continuar.",
+      "voice.config.more": "▼ Mais línguas",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Língua…",
+      "voice.config.pickSpeed": "Velocidade…",
+      "voice.config.pickVoice": "Voz…",
+      "voice.config.save": "Guardar",
+      "voice.config.summary": "Seleção atual: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configuração de voz** — escolhe as opções abaixo e carrega em **Guardar**. Nada muda até o fazeres."
     },
     "es": {
       "speak.emptyMessage": "Ese mensaje no tiene texto para leer en voz alta.",
@@ -2178,7 +2211,18 @@
       "wizard.readyTitle": "Vozen está listo",
       "wizard.readyDescription": "Entra en una llamada y escribe en {channel}.",
       "wizard.readyDescriptionManualJoin": "Entra en una llamada, usa `/join` y escribe en {channel}.",
-      "wizard.readyFooter": "Elige tu voz con /voice."
+      "wizard.readyFooter": "Elige tu voz con /voice.",
+      "voice.config.cancel": "Cancelar",
+      "voice.config.cancelled": "Configuración cancelada — no ha cambiado nada.",
+      "voice.config.expired": "El panel ha caducado — ejecuta `/voice config` de nuevo para continuar.",
+      "voice.config.more": "▼ Más idiomas",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Idioma…",
+      "voice.config.pickSpeed": "Velocidad…",
+      "voice.config.pickVoice": "Voz…",
+      "voice.config.save": "Guardar",
+      "voice.config.summary": "Selección actual: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configuración de voz** — elige las opciones de abajo y pulsa **Guardar**. Nada cambiará hasta entonces."
     },
     "fr": {
       "speak.emptyMessage": "Ce message n'a pas de texte à lire à voix haute.",
@@ -2713,7 +2757,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Annuler",
+      "voice.config.cancelled": "Configuration annulée — rien n'a changé.",
+      "voice.config.expired": "Le panneau a expiré — relancez `/voice config` pour continuer.",
+      "voice.config.more": "▼ Plus de langues",
+      "voice.config.pickEngine": "Moteur…",
+      "voice.config.pickLanguage": "Langue…",
+      "voice.config.pickSpeed": "Vitesse…",
+      "voice.config.pickVoice": "Voix…",
+      "voice.config.save": "Enregistrer",
+      "voice.config.summary": "Sélection actuelle : **{voice}** · moteur **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configuration de la voix** — choisissez les options ci-dessous, puis appuyez sur **Enregistrer**. Rien ne change avant cela."
     },
     "de": {
       "speak.emptyMessage": "Diese Nachricht hat keinen Text zum Vorlesen.",
@@ -3248,7 +3303,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Abbrechen",
+      "voice.config.cancelled": "Einrichtung abgebrochen — nichts wurde geändert.",
+      "voice.config.expired": "Das Bedienfeld ist abgelaufen — führe `/voice config` erneut aus.",
+      "voice.config.more": "▼ Weitere Sprachen",
+      "voice.config.pickEngine": "Engine…",
+      "voice.config.pickLanguage": "Sprache…",
+      "voice.config.pickSpeed": "Geschwindigkeit…",
+      "voice.config.pickVoice": "Stimme…",
+      "voice.config.save": "Speichern",
+      "voice.config.summary": "Aktuelle Auswahl: **{voice}** · Engine **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Stimme einrichten** — wähle unten deine Optionen und drücke dann **Speichern**. Bis dahin ändert sich nichts."
     },
     "nl": {
       "speak.emptyMessage": "Dat bericht heeft geen tekst om hardop voor te lezen.",
@@ -3783,7 +3849,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Annuleren",
+      "voice.config.cancelled": "Instellen geannuleerd — er is niets gewijzigd.",
+      "voice.config.expired": "Het paneel is verlopen — voer `/voice config` opnieuw uit om door te gaan.",
+      "voice.config.more": "▼ Meer talen",
+      "voice.config.pickEngine": "Engine…",
+      "voice.config.pickLanguage": "Taal…",
+      "voice.config.pickSpeed": "Snelheid…",
+      "voice.config.pickVoice": "Stem…",
+      "voice.config.save": "Opslaan",
+      "voice.config.summary": "Huidige selectie: **{voice}** · engine **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Stem instellen** — kies hieronder je opties en druk daarna op **Opslaan**. Tot die tijd verandert er niets."
     },
     "pl": {
       "speak.emptyMessage": "Ta wiadomość nie ma tekstu do przeczytania na głos.",
@@ -4318,7 +4395,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Anuluj",
+      "voice.config.cancelled": "Konfiguracja anulowana — nic się nie zmieniło.",
+      "voice.config.expired": "Panel wygasł — uruchom ponownie `/voice config`, aby kontynuować.",
+      "voice.config.more": "▼ Więcej języków",
+      "voice.config.pickEngine": "Silnik…",
+      "voice.config.pickLanguage": "Język…",
+      "voice.config.pickSpeed": "Prędkość…",
+      "voice.config.pickVoice": "Głos…",
+      "voice.config.save": "Zapisz",
+      "voice.config.summary": "Bieżący wybór: **{voice}** · silnik **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Konfiguracja głosu** — wybierz opcje poniżej, a następnie naciśnij **Zapisz**. Do tego czasu nic się nie zmieni."
     },
     "tr": {
       "speak.emptyMessage": "Bu mesajda sesli okunacak metin yok.",
@@ -4853,7 +4941,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "İptal",
+      "voice.config.cancelled": "Ayar iptal edildi — hiçbir şey değişmedi.",
+      "voice.config.expired": "Panelin süresi doldu — devam etmek için `/voice config` komutunu yeniden çalıştır.",
+      "voice.config.more": "▼ Daha fazla dil",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Dil…",
+      "voice.config.pickSpeed": "Hız…",
+      "voice.config.pickVoice": "Ses…",
+      "voice.config.save": "Kaydet",
+      "voice.config.summary": "Geçerli seçim: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Ses ayarı** — aşağıdaki seçenekleri belirleyip **Kaydet** düğmesine bas. Bunu yapana kadar hiçbir şey değişmez."
     },
     "cs": {
       "speak.emptyMessage": "Tato zpráva nemá žádný text ke čtení nahlas.",
@@ -5388,7 +5487,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Zrušit",
+      "voice.config.cancelled": "Nastavení zrušeno — nic se nezměnilo.",
+      "voice.config.expired": "Platnost panelu vypršela — pro pokračování znovu spusť `/voice config`.",
+      "voice.config.more": "▼ Další jazyky",
+      "voice.config.pickEngine": "Modul…",
+      "voice.config.pickLanguage": "Jazyk…",
+      "voice.config.pickSpeed": "Rychlost…",
+      "voice.config.pickVoice": "Hlas…",
+      "voice.config.save": "Uložit",
+      "voice.config.summary": "Aktuální výběr: **{voice}** · modul **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Nastavení hlasu** — vyber možnosti níže a stiskni **Uložit**. Do té doby se nic nezmění."
     },
     "sv": {
       "speak.emptyMessage": "Det meddelandet har ingen text att läsa upp.",
@@ -5923,7 +6033,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Avbryt",
+      "voice.config.cancelled": "Inställningen avbröts — inget ändrades.",
+      "voice.config.expired": "Panelen har gått ut — kör `/voice config` igen för att fortsätta.",
+      "voice.config.more": "▼ Fler språk",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Språk…",
+      "voice.config.pickSpeed": "Hastighet…",
+      "voice.config.pickVoice": "Röst…",
+      "voice.config.save": "Spara",
+      "voice.config.summary": "Aktuellt val: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Röstinställning** — välj alternativen nedan och tryck sedan på **Spara**. Inget ändras förrän du gör det."
     },
     "fi": {
       "speak.emptyMessage": "Tuossa viestissä ei ole ääneen luettavaa tekstiä.",
@@ -6458,7 +6579,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Peruuta",
+      "voice.config.cancelled": "Asetus peruutettu — mitään ei muutettu.",
+      "voice.config.expired": "Paneeli vanheni — jatka suorittamalla `/voice config` uudelleen.",
+      "voice.config.more": "▼ Lisää kieliä",
+      "voice.config.pickEngine": "Moottori…",
+      "voice.config.pickLanguage": "Kieli…",
+      "voice.config.pickSpeed": "Nopeus…",
+      "voice.config.pickVoice": "Ääni…",
+      "voice.config.save": "Tallenna",
+      "voice.config.summary": "Nykyinen valinta: **{voice}** · moottori **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Ääniasetukset** — valitse vaihtoehdot alta ja paina sitten **Tallenna**. Mikään ei muutu ennen sitä."
     },
     "da": {
       "speak.emptyMessage": "Den besked har ingen tekst at læse højt.",
@@ -6993,7 +7125,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Annuller",
+      "voice.config.cancelled": "Opsætningen blev annulleret — intet blev ændret.",
+      "voice.config.expired": "Panelet er udløbet — kør `/voice config` igen for at fortsætte.",
+      "voice.config.more": "▼ Flere sprog",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Sprog…",
+      "voice.config.pickSpeed": "Hastighed…",
+      "voice.config.pickVoice": "Stemme…",
+      "voice.config.save": "Gem",
+      "voice.config.summary": "Aktuelt valg: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Stemmeopsætning** — vælg mulighederne nedenfor, og tryk derefter på **Gem**. Intet ændres, før du gør det."
     },
     "ro": {
       "speak.emptyMessage": "Acel mesaj nu are text de citit cu voce tare.",
@@ -7528,7 +7671,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Anulează",
+      "voice.config.cancelled": "Configurare anulată — nu s-a schimbat nimic.",
+      "voice.config.expired": "Panoul a expirat — rulează din nou `/voice config` pentru a continua.",
+      "voice.config.more": "▼ Mai multe limbi",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Limbă…",
+      "voice.config.pickSpeed": "Viteză…",
+      "voice.config.pickVoice": "Voce…",
+      "voice.config.save": "Salvează",
+      "voice.config.summary": "Selecția curentă: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configurarea vocii** — alege opțiunile de mai jos, apoi apasă **Salvează**. Nimic nu se schimbă până atunci."
     },
     "hu": {
       "speak.emptyMessage": "Ennek az üzenetnek nincs felolvasható szövege.",
@@ -8063,7 +8217,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Mégse",
+      "voice.config.cancelled": "A beállítás megszakítva — semmi sem változott.",
+      "voice.config.expired": "A panel lejárt — a folytatáshoz futtasd újra a `/voice config` parancsot.",
+      "voice.config.more": "▼ További nyelvek",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Nyelv…",
+      "voice.config.pickSpeed": "Sebesség…",
+      "voice.config.pickVoice": "Hang…",
+      "voice.config.save": "Mentés",
+      "voice.config.summary": "Jelenlegi választás: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Hangbeállítás** — válaszd ki az alábbi lehetőségeket, majd nyomd meg a **Mentés** gombot. Addig semmi sem változik."
     },
     "cy": {
       "speak.emptyMessage": "Does dim testun yn y neges yna i'w ddarllen yn uchel.",
@@ -8598,7 +8763,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Canslo",
+      "voice.config.cancelled": "Gosodiad wedi ei ganslo — ni newidiodd dim.",
+      "voice.config.expired": "Mae’r panel wedi dod i ben — rhedwch `/voice config` eto i barhau.",
+      "voice.config.more": "▼ Rhagor o ieithoedd",
+      "voice.config.pickEngine": "Peiriant…",
+      "voice.config.pickLanguage": "Iaith…",
+      "voice.config.pickSpeed": "Cyflymder…",
+      "voice.config.pickVoice": "Llais…",
+      "voice.config.save": "Cadw",
+      "voice.config.summary": "Dewis cyfredol: **{voice}** · peiriant **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Gosodiad llais** — dewiswch yr opsiynau isod, yna pwyswch **Cadw**. Ni fydd dim yn newid tan hynny."
     },
     "is": {
       "speak.emptyMessage": "Þessi skilaboð hafa engan texta til að lesa upphátt.",
@@ -9133,7 +9309,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Hætta við",
+      "voice.config.cancelled": "Stillingu hætt við — engu var breytt.",
+      "voice.config.expired": "Spjaldið rann út — keyrðu `/voice config` aftur til að halda áfram.",
+      "voice.config.more": "▼ Fleiri tungumál",
+      "voice.config.pickEngine": "Vél…",
+      "voice.config.pickLanguage": "Tungumál…",
+      "voice.config.pickSpeed": "Hraði…",
+      "voice.config.pickVoice": "Rödd…",
+      "voice.config.save": "Vista",
+      "voice.config.summary": "Núverandi val: **{voice}** · vél **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Raddstilling** — veldu valkostina hér fyrir neðan og ýttu síðan á **Vista**. Ekkert breytist fyrr en þú gerir það."
     },
     "lb": {
       "speak.emptyMessage": "Dëse Message huet keen Text fir haart virzeliesen.",
@@ -9668,7 +9855,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Ofbriechen",
+      "voice.config.cancelled": "Astellung ofgebrach — näischt gouf geännert.",
+      "voice.config.expired": "De Panel ass ofgelaf — féier `/voice config` nach eng Kéier aus.",
+      "voice.config.more": "▼ Méi Sproochen",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Sprooch…",
+      "voice.config.pickSpeed": "Geschwindegkeet…",
+      "voice.config.pickVoice": "Stëmm…",
+      "voice.config.save": "Späicheren",
+      "voice.config.summary": "Aktuell Auswiel: **{voice}** · Motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Stëmmastellung** — wiel d’Optiounen hei drënner a dréck dann op **Späicheren**. Bis dohi gëtt näischt geännert."
     },
     "lv": {
       "speak.emptyMessage": "Šai ziņai nav teksta, ko nolasīt skaļi.",
@@ -10203,7 +10401,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Atcelt",
+      "voice.config.cancelled": "Iestatīšana atcelta — nekas netika mainīts.",
+      "voice.config.expired": "Paneļa derīgums beidzies — palaid `/voice config` vēlreiz, lai turpinātu.",
+      "voice.config.more": "▼ Vairāk valodu",
+      "voice.config.pickEngine": "Dzinējs…",
+      "voice.config.pickLanguage": "Valoda…",
+      "voice.config.pickSpeed": "Ātrums…",
+      "voice.config.pickVoice": "Balss…",
+      "voice.config.save": "Saglabāt",
+      "voice.config.summary": "Pašreizējā izvēle: **{voice}** · dzinējs **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Balss iestatīšana** — izvēlies opcijas zemāk un pēc tam nospied **Saglabāt**. Līdz tam nekas nemainīsies."
     },
     "sk": {
       "speak.emptyMessage": "Táto správa nemá žiadny text na čítanie nahlas.",
@@ -10738,7 +10947,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Zrušiť",
+      "voice.config.cancelled": "Nastavenie zrušené — nič sa nezmenilo.",
+      "voice.config.expired": "Platnosť panela vypršala — pre pokračovanie znova spusti `/voice config`.",
+      "voice.config.more": "▼ Ďalšie jazyky",
+      "voice.config.pickEngine": "Modul…",
+      "voice.config.pickLanguage": "Jazyk…",
+      "voice.config.pickSpeed": "Rýchlosť…",
+      "voice.config.pickVoice": "Hlas…",
+      "voice.config.save": "Uložiť",
+      "voice.config.summary": "Aktuálny výber: **{voice}** · modul **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Nastavenie hlasu** — vyber možnosti nižšie a stlač **Uložiť**. Dovtedy sa nič nezmení."
     },
     "sl": {
       "speak.emptyMessage": "To sporočilo nima besedila za branje na glas.",
@@ -11273,7 +11493,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Prekliči",
+      "voice.config.cancelled": "Nastavitev preklicana — nič se ni spremenilo.",
+      "voice.config.expired": "Plošča je potekla — za nadaljevanje znova zaženi `/voice config`.",
+      "voice.config.more": "▼ Več jezikov",
+      "voice.config.pickEngine": "Mehanizem…",
+      "voice.config.pickLanguage": "Jezik…",
+      "voice.config.pickSpeed": "Hitrost…",
+      "voice.config.pickVoice": "Glas…",
+      "voice.config.save": "Shrani",
+      "voice.config.summary": "Trenutna izbira: **{voice}** · mehanizem **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Nastavitev glasu** — izberi spodnje možnosti in nato pritisni **Shrani**. Do takrat se nič ne spremeni."
     },
     "sw": {
       "speak.emptyMessage": "Ujumbe huo hauna maandishi ya kusoma kwa sauti.",
@@ -11808,7 +12039,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Ghairi",
+      "voice.config.cancelled": "Mipangilio imeghairiwa — hakuna kilichobadilika.",
+      "voice.config.expired": "Kidirisha kimepitwa na muda — endesha `/voice config` tena ili kuendelea.",
+      "voice.config.more": "▼ Lugha zaidi",
+      "voice.config.pickEngine": "Injini…",
+      "voice.config.pickLanguage": "Lugha…",
+      "voice.config.pickSpeed": "Kasi…",
+      "voice.config.pickVoice": "Sauti…",
+      "voice.config.save": "Hifadhi",
+      "voice.config.summary": "Chaguo la sasa: **{voice}** · injini **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Mipangilio ya sauti** — chagua machaguo yaliyo hapa chini, kisha bonyeza **Hifadhi**. Hakuna kitakachobadilika hadi ufanye hivyo."
     },
     "vi": {
       "speak.emptyMessage": "Tin nhắn đó không có văn bản để đọc to.",
@@ -12343,7 +12585,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Hủy",
+      "voice.config.cancelled": "Đã hủy thiết lập — không có gì thay đổi.",
+      "voice.config.expired": "Bảng điều khiển đã hết hạn — chạy lại `/voice config` để tiếp tục.",
+      "voice.config.more": "▼ Thêm ngôn ngữ",
+      "voice.config.pickEngine": "Bộ máy…",
+      "voice.config.pickLanguage": "Ngôn ngữ…",
+      "voice.config.pickSpeed": "Tốc độ…",
+      "voice.config.pickVoice": "Giọng nói…",
+      "voice.config.save": "Lưu",
+      "voice.config.summary": "Lựa chọn hiện tại: **{voice}** · bộ máy **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Thiết lập giọng nói** — chọn các tùy chọn bên dưới rồi nhấn **Lưu**. Sẽ không có gì thay đổi cho đến lúc đó."
     },
     "ca": {
       "speak.emptyMessage": "Aquest missatge no té text per llegir en veu alta.",
@@ -12878,7 +13131,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Cancel·la",
+      "voice.config.cancelled": "Configuració cancel·lada — no ha canviat res.",
+      "voice.config.expired": "El tauler ha caducat — torna a executar `/voice config` per continuar.",
+      "voice.config.more": "▼ Més idiomes",
+      "voice.config.pickEngine": "Motor…",
+      "voice.config.pickLanguage": "Idioma…",
+      "voice.config.pickSpeed": "Velocitat…",
+      "voice.config.pickVoice": "Veu…",
+      "voice.config.save": "Desa",
+      "voice.config.summary": "Selecció actual: **{voice}** · motor **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configuració de veu** — tria les opcions de sota i prem **Desa**. No canviarà res fins que ho facis."
     },
     "it": {
       "speak.emptyMessage": "Quel messaggio non ha testo da leggere ad alta voce.",
@@ -13413,7 +13677,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Annulla",
+      "voice.config.cancelled": "Configurazione annullata — non è cambiato nulla.",
+      "voice.config.expired": "Il pannello è scaduto — esegui di nuovo `/voice config` per continuare.",
+      "voice.config.more": "▼ Altre lingue",
+      "voice.config.pickEngine": "Motore…",
+      "voice.config.pickLanguage": "Lingua…",
+      "voice.config.pickSpeed": "Velocità…",
+      "voice.config.pickVoice": "Voce…",
+      "voice.config.save": "Salva",
+      "voice.config.summary": "Selezione attuale: **{voice}** · motore **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Configurazione della voce** — scegli le opzioni qui sotto, poi premi **Salva**. Nulla cambierà fino ad allora."
     },
     "el": {
       "speak.emptyMessage": "Αυτό το μήνυμα δεν έχει κείμενο για ανάγνωση δυνατά.",
@@ -13948,7 +14223,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Ακύρωση",
+      "voice.config.cancelled": "Η ρύθμιση ακυρώθηκε — δεν άλλαξε τίποτα.",
+      "voice.config.expired": "Το πάνελ έληξε — εκτέλεσε ξανά το `/voice config` για να συνεχίσεις.",
+      "voice.config.more": "▼ Περισσότερες γλώσσες",
+      "voice.config.pickEngine": "Μηχανή…",
+      "voice.config.pickLanguage": "Γλώσσα…",
+      "voice.config.pickSpeed": "Ταχύτητα…",
+      "voice.config.pickVoice": "Φωνή…",
+      "voice.config.save": "Αποθήκευση",
+      "voice.config.summary": "Τρέχουσα επιλογή: **{voice}** · μηχανή **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Ρύθμιση φωνής** — διάλεξε τις επιλογές παρακάτω και πάτησε **Αποθήκευση**. Τίποτα δεν αλλάζει μέχρι τότε."
     },
     "ru": {
       "speak.emptyMessage": "В этом сообщении нет текста, который можно прочитать вслух.",
@@ -14483,7 +14769,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Отмена",
+      "voice.config.cancelled": "Настройка отменена — ничего не изменилось.",
+      "voice.config.expired": "Срок действия панели истёк — снова запустите `/voice config` для продолжения.",
+      "voice.config.more": "▼ Больше языков",
+      "voice.config.pickEngine": "Движок…",
+      "voice.config.pickLanguage": "Язык…",
+      "voice.config.pickSpeed": "Скорость…",
+      "voice.config.pickVoice": "Голос…",
+      "voice.config.save": "Сохранить",
+      "voice.config.summary": "Текущий выбор: **{voice}** · движок **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Настройка голоса** — выберите параметры ниже и нажмите **Сохранить**. До этого ничего не изменится."
     },
     "uk": {
       "speak.emptyMessage": "У цьому повідомленні немає тексту для читання вголос.",
@@ -15018,7 +15315,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Скасувати",
+      "voice.config.cancelled": "Налаштування скасовано — нічого не змінилося.",
+      "voice.config.expired": "Термін дії панелі минув — знову запустіть `/voice config`, щоб продовжити.",
+      "voice.config.more": "▼ Більше мов",
+      "voice.config.pickEngine": "Рушій…",
+      "voice.config.pickLanguage": "Мова…",
+      "voice.config.pickSpeed": "Швидкість…",
+      "voice.config.pickVoice": "Голос…",
+      "voice.config.save": "Зберегти",
+      "voice.config.summary": "Поточний вибір: **{voice}** · рушій **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Налаштування голосу** — виберіть параметри нижче й натисніть **Зберегти**. До цього нічого не зміниться."
     },
     "kk": {
       "speak.emptyMessage": "Бұл хабарламада дауыстап оқитын мәтін жоқ.",
@@ -15553,7 +15861,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Болдырмау",
+      "voice.config.cancelled": "Баптау тоқтатылды — ештеңе өзгерген жоқ.",
+      "voice.config.expired": "Панель мерзімі аяқталды — жалғастыру үшін `/voice config` пәрменін қайта іске қосыңыз.",
+      "voice.config.more": "▼ Қосымша тілдер",
+      "voice.config.pickEngine": "Қозғалтқыш…",
+      "voice.config.pickLanguage": "Тіл…",
+      "voice.config.pickSpeed": "Жылдамдық…",
+      "voice.config.pickVoice": "Дауыс…",
+      "voice.config.save": "Сақтау",
+      "voice.config.summary": "Ағымдағы таңдау: **{voice}** · қозғалтқыш **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Дауысты баптау** — төмендегі параметрлерді таңдап, **Сақтау** түймесін басыңыз. Оған дейін ештеңе өзгермейді."
     },
     "sr": {
       "speak.emptyMessage": "Та порука нема текст за читање наглас.",
@@ -16088,7 +16407,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "Откажи",
+      "voice.config.cancelled": "Подешавање је отказано — ништа није промењено.",
+      "voice.config.expired": "Панел је истекао — поново покрените `/voice config` да наставите.",
+      "voice.config.more": "▼ Још језика",
+      "voice.config.pickEngine": "Механизам…",
+      "voice.config.pickLanguage": "Језик…",
+      "voice.config.pickSpeed": "Брзина…",
+      "voice.config.pickVoice": "Глас…",
+      "voice.config.save": "Сачувај",
+      "voice.config.summary": "Тренутни избор: **{voice}** · механизам **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **Подешавање гласа** — изаберите опције испод, па притисните **Сачувај**. До тада се ништа неће променити."
     },
     "ar": {
       "speak.emptyMessage": "هذه الرسالة لا تحتوي على نص لقراءته بصوت عالٍ.",
@@ -16623,7 +16953,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "إلغاء",
+      "voice.config.cancelled": "تم إلغاء الإعداد — لم يتغير شيء.",
+      "voice.config.expired": "انتهت صلاحية اللوحة — شغّل `/voice config` مرة أخرى للمتابعة.",
+      "voice.config.more": "▼ لغات إضافية",
+      "voice.config.pickEngine": "المحرك…",
+      "voice.config.pickLanguage": "اللغة…",
+      "voice.config.pickSpeed": "السرعة…",
+      "voice.config.pickVoice": "الصوت…",
+      "voice.config.save": "حفظ",
+      "voice.config.summary": "الاختيار الحالي: **{voice}** · المحرك **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **إعداد الصوت** — اختر الخيارات أدناه، ثم اضغط **حفظ**. لن يتغير شيء حتى تفعل ذلك."
     },
     "fa": {
       "speak.emptyMessage": "این پیام متنی برای خواندن با صدای بلند ندارد.",
@@ -17158,7 +17499,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "لغو",
+      "voice.config.cancelled": "تنظیم لغو شد — چیزی تغییر نکرد.",
+      "voice.config.expired": "پنل منقضی شد — برای ادامه دوباره `/voice config` را اجرا کنید.",
+      "voice.config.more": "▼ زبان‌های بیشتر",
+      "voice.config.pickEngine": "موتور…",
+      "voice.config.pickLanguage": "زبان…",
+      "voice.config.pickSpeed": "سرعت…",
+      "voice.config.pickVoice": "صدا…",
+      "voice.config.save": "ذخیره",
+      "voice.config.summary": "انتخاب فعلی: **{voice}** · موتور **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **تنظیم صدا** — گزینه‌های زیر را انتخاب کنید، سپس **ذخیره** را بزنید. تا آن زمان چیزی تغییر نمی‌کند."
     },
     "ka": {
       "speak.emptyMessage": "ამ შეტყობინებას ხმამაღლა წასაკითხი ტექსტი არ აქვს.",
@@ -17693,7 +18045,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "გაუქმება",
+      "voice.config.cancelled": "დაყენება გაუქმდა — არაფერი შეცვლილა.",
+      "voice.config.expired": "პანელის ვადა ამოიწურა — გასაგრძელებლად კვლავ გაუშვით `/voice config`.",
+      "voice.config.more": "▼ მეტი ენა",
+      "voice.config.pickEngine": "ძრავა…",
+      "voice.config.pickLanguage": "ენა…",
+      "voice.config.pickSpeed": "სიჩქარე…",
+      "voice.config.pickVoice": "ხმა…",
+      "voice.config.save": "შენახვა",
+      "voice.config.summary": "მიმდინარე არჩევანი: **{voice}** · ძრავა **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **ხმის დაყენება** — აირჩიეთ ქვემოთ მოცემული ვარიანტები და დააჭირეთ **შენახვას**. მანამდე არაფერი შეიცვლება."
     },
     "ne": {
       "speak.emptyMessage": "त्यो सन्देशमा ठूलो स्वरमा पढ्ने कुनै पाठ छैन।",
@@ -18228,7 +18591,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "रद्द",
+      "voice.config.cancelled": "सेटअप रद्द गरियो — केही परिवर्तन भएन।",
+      "voice.config.expired": "प्यानलको म्याद सकियो — जारी राख्न `/voice config` फेरि चलाउनुहोस्।",
+      "voice.config.more": "▼ थप भाषाहरू",
+      "voice.config.pickEngine": "इन्जिन…",
+      "voice.config.pickLanguage": "भाषा…",
+      "voice.config.pickSpeed": "गति…",
+      "voice.config.pickVoice": "आवाज…",
+      "voice.config.save": "सेभ",
+      "voice.config.summary": "हालको छनोट: **{voice}** · इन्जिन **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **आवाज सेटअप** — तलका विकल्पहरू छान्नुहोस् र त्यसपछि **सेभ** थिच्नुहोस्। त्यसअघि केही परिवर्तन हुँदैन।"
     },
     "zh": {
       "speak.emptyMessage": "那条消息没有可朗读的文字。",
@@ -18763,7 +19137,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "取消",
+      "voice.config.cancelled": "设置已取消——未做任何更改。",
+      "voice.config.expired": "面板已过期——请再次运行 `/voice config` 以继续。",
+      "voice.config.more": "▼ 更多语言",
+      "voice.config.pickEngine": "引擎…",
+      "voice.config.pickLanguage": "语言…",
+      "voice.config.pickSpeed": "语速…",
+      "voice.config.pickVoice": "声音…",
+      "voice.config.save": "保存",
+      "voice.config.summary": "当前选择：**{voice}** · 引擎 **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **语音设置** — 选择下面的选项，然后按 **保存**。保存前不会有任何更改。"
     },
     "ja": {
       "speak.emptyMessage": "そのメッセージには読み上げるテキストがありません。",
@@ -19298,7 +19683,18 @@
       "wizard.readyTitle": "Vozen is ready",
       "wizard.readyDescription": "Join a voice channel, then write in {channel}.",
       "wizard.readyDescriptionManualJoin": "Join a voice channel, use `/join`, then write in {channel}.",
-      "wizard.readyFooter": "Choose your voice with /voice."
+      "wizard.readyFooter": "Choose your voice with /voice.",
+      "voice.config.cancel": "キャンセル",
+      "voice.config.cancelled": "設定をキャンセルしました。変更はありません。",
+      "voice.config.expired": "パネルの有効期限が切れました。続けるには `/voice config` をもう一度実行してください。",
+      "voice.config.more": "▼ その他の言語",
+      "voice.config.pickEngine": "エンジン…",
+      "voice.config.pickLanguage": "言語…",
+      "voice.config.pickSpeed": "速度…",
+      "voice.config.pickVoice": "音声…",
+      "voice.config.save": "保存",
+      "voice.config.summary": "現在の選択：**{voice}** · エンジン **{engine}** · {speed}×",
+      "voice.config.title": "🎙️ **音声設定** — 下の項目を選び、**保存**を押してください。保存するまで変更は反映されません。"
     }
   }
 }
