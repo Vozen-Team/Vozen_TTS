@@ -6,12 +6,13 @@
 
 use std::{
     collections::BTreeMap,
+    future::Future,
     sync::{Arc, Mutex},
 };
 
 use serenity::model::application::CommandData;
 use thiserror::Error;
-use vozen_store::SqliteStore;
+use vozen_store::{GuildConfig, SqliteStore};
 
 use crate::{
     CommandSpeechSynthesizer, CommandVoicePlayback, CoreVoiceInteractionFacts, CoreVoiceOutcome,
@@ -143,13 +144,14 @@ where
     S: CommandSpeechSynthesizer,
     P: CommandVoicePlayback,
 {
-    pub async fn execute(
+    pub async fn execute<Fut: Future<Output = bool> + Send>(
         &self,
         command: &CommandData,
         facts: &CoreVoiceInteractionFacts,
         interaction_locale: Option<&str>,
         resolve_user: &(dyn Fn(&str) -> String + Send + Sync),
         resolve_channel: &(dyn Fn(&str) -> String + Send + Sync),
+        can_read_channel: impl FnOnce(String) -> Fut + Send,
     ) -> Result<CoreVoiceInteractionExecution, CoreVoiceExecutionError> {
         let Some(command) =
             parse_promoted_core_voice(command).map_err(|_| CoreVoiceExecutionError::Command)?
@@ -198,7 +200,17 @@ where
                 .execute(facts.invocation(resolve_user, resolve_channel), &command)
                 .await
         };
-        let (response, parameters, guild_locale) = self.response_context(outcome, facts);
+        let (mut response, mut parameters, guild) = self.response_context(outcome, facts);
+        if response == CoreVoiceResponse::Joined
+            && let Some(read_channel_id) = guild
+                .as_ref()
+                .filter(|config| config.autoread)
+                .and_then(|config| config.tts_channel_id.as_deref())
+            && can_read_channel(read_channel_id.to_owned()).await
+        {
+            parameters.insert("readChannel", channel_mention(read_channel_id));
+            response = CoreVoiceResponse::JoinedAutoread;
+        }
         let content = self
             .localizer
             .render(
@@ -211,7 +223,7 @@ where
                 if defer_ephemeral {
                     None
                 } else {
-                    guild_locale.as_deref()
+                    guild.as_ref().map(|config| config.locale.as_str())
                 },
                 &parameters,
             )
@@ -337,7 +349,7 @@ where
     ) -> (
         CoreVoiceResponse,
         BTreeMap<&'static str, String>,
-        Option<String>,
+        Option<GuildConfig>,
     ) {
         let joke_text = match &outcome {
             CoreVoiceOutcome::Joke(result) => result.joke.clone(),
@@ -357,45 +369,23 @@ where
             }
             _ => None,
         };
-        let mut response = core_voice_response(outcome);
+        let response = core_voice_response(outcome);
         let guild = self
             .store
             .lock()
             .ok()
             .and_then(|store| store.guild_config(&facts.guild_id).ok());
-        let guild_locale = guild.as_ref().map(|config| config.locale.clone());
         let mut parameters = BTreeMap::new();
 
-        if response == CoreVoiceResponse::Joined {
+        if matches!(
+            response,
+            CoreVoiceResponse::Joined | CoreVoiceResponse::JoinPermissionDenied
+        ) {
             let Some(voice_channel_id) = self
                 .gateway_state
                 .voice_channel_id(&facts.guild_id, &facts.user_id)
             else {
-                return (
-                    CoreVoiceResponse::StoreUnavailable,
-                    parameters,
-                    guild_locale,
-                );
-            };
-            parameters.insert("channel", channel_mention(&voice_channel_id));
-            if let Some(read_channel_id) = guild.as_ref().and_then(|config| {
-                (config.autoread)
-                    .then_some(config.tts_channel_id.as_deref())
-                    .flatten()
-            }) {
-                parameters.insert("readChannel", channel_mention(read_channel_id));
-                response = CoreVoiceResponse::JoinedAutoread;
-            }
-        } else if response == CoreVoiceResponse::JoinPermissionDenied {
-            let Some(voice_channel_id) = self
-                .gateway_state
-                .voice_channel_id(&facts.guild_id, &facts.user_id)
-            else {
-                return (
-                    CoreVoiceResponse::StoreUnavailable,
-                    parameters,
-                    guild_locale,
-                );
+                return (CoreVoiceResponse::StoreUnavailable, parameters, guild);
             };
             parameters.insert("channel", channel_mention(&voice_channel_id));
         }
@@ -425,7 +415,7 @@ where
                 text,
             );
         }
-        (response, parameters, guild_locale)
+        (response, parameters, guild)
     }
 
     fn guild_locale(&self, facts: &CoreVoiceInteractionFacts) -> Option<String> {
@@ -514,6 +504,98 @@ mod tests {
 
     struct RejectJoin(VoiceSessionTransportError);
 
+    struct AcceptJoin;
+
+    #[async_trait]
+    impl VoiceSessionTransport for AcceptJoin {
+        async fn join(&self, _: &str, _: &str) -> Result<(), VoiceSessionTransportError> {
+            Ok(())
+        }
+
+        async fn leave(&self, _: &str) -> Result<(), VoiceSessionTransportError> {
+            panic!("the joined call must stay connected")
+        }
+    }
+
+    #[tokio::test]
+    async fn joined_response_advertises_autoread_only_for_a_verified_channel() {
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        store
+            .lock()
+            .unwrap()
+            .update_guild_config(
+                "7",
+                vozen_store::GuildConfigPatch {
+                    tts_channel_id: Some(Some("123".into())),
+                    autoread: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let state = GatewayState::default();
+        state.remember_bot_user("100".into());
+        state.update_voice_state("7", "42", Some("88".into()));
+        let executor = CoreVoiceInteractionExecutor::new(
+            store.clone(),
+            state,
+            AcceptJoin,
+            NoAudio,
+            NoAudio,
+            CoreVoiceSettings {
+                available_models: vec!["en_US-amy-medium".into()],
+                default_voice: "en_US-amy-medium".into(),
+                default_speed: 1.0,
+                default_engine: SynthesisEngine::Piper,
+            },
+            Arc::new(|| 100),
+        )
+        .unwrap();
+        let data = command(r#"{"id":"1","name":"join","type":1,"options":[]}"#);
+        let facts = CoreVoiceInteractionFacts {
+            guild_id: "7".into(),
+            channel_id: "77".into(),
+            user_id: "42".into(),
+            member_role_ids: Some(vec![]),
+        };
+        for available in [false, true] {
+            let execution = executor
+                .execute(
+                    &data,
+                    &facts,
+                    Some("en-US"),
+                    &|_| "someone".into(),
+                    &|_| "channel".into(),
+                    |channel_id| async move {
+                        assert_eq!(channel_id, "123");
+                        available
+                    },
+                )
+                .await
+                .unwrap();
+            let CoreVoiceInteractionExecution::Reply {
+                content,
+                defer_public,
+                ..
+            } = execution
+            else {
+                panic!("expected a successful join reply");
+            };
+            assert!(defer_public && content.contains("<#88>"), "{content}");
+            assert_eq!(content.contains("<#123>"), available, "{content}");
+            assert_eq!(content.contains("/tts"), !available, "{content}");
+        }
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .guild_config("7")
+                .unwrap()
+                .tts_channel_id
+                .as_deref(),
+            Some("123")
+        );
+    }
+
     #[async_trait]
     impl VoiceSessionTransport for RejectJoin {
         async fn join(&self, guild: &str, channel: &str) -> Result<(), VoiceSessionTransportError> {
@@ -574,9 +656,14 @@ mod tests {
             )
             .unwrap();
             let reply = executor
-                .execute(&data, &facts, Some("en-US"), &|_| "someone".into(), &|_| {
-                    "channel".into()
-                })
+                .execute(
+                    &data,
+                    &facts,
+                    Some("en-US"),
+                    &|_| "someone".into(),
+                    &|_| "channel".into(),
+                    |_| async { panic!("failed joins do not look up the read channel") },
+                )
                 .await
                 .unwrap();
             let CoreVoiceInteractionExecution::Reply {
@@ -651,9 +738,14 @@ mod tests {
                 command(r#"{"id":"1","name":"join","type":1,"options":[]}"#)
             };
             let result = executor
-                .execute(&data, &facts, Some(user), &|_| "someone".into(), &|_| {
-                    "channel".into()
-                })
+                .execute(
+                    &data,
+                    &facts,
+                    Some(user),
+                    &|_| "someone".into(),
+                    &|_| "channel".into(),
+                    |_| async { panic!("voice previews do not look up the read channel") },
+                )
                 .await
                 .unwrap();
             let CoreVoiceInteractionExecution::Reply {

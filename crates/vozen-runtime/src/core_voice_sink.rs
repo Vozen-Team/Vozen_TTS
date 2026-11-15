@@ -31,7 +31,7 @@ use serenity::{
         application::{
             ButtonStyle, CommandType, ComponentInteractionDataKind, InputTextStyle, Interaction,
         },
-        channel::ChannelType,
+        channel::{Channel, ChannelType},
         id::{ChannelId, GuildId, UserId},
     },
 };
@@ -4076,6 +4076,8 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
                 .await
                 .map_err(|_| GatewayEventDispatchError)?;
         }
+        let http = &context.http;
+        let guild_id = command.guild_id;
         let response = executor
             .execute(
                 &command.data,
@@ -4083,6 +4085,24 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
                 Some(&command.locale),
                 &|_| "someone".into(),
                 &|_| "channel".into(),
+                |channel_id| async move {
+                    let (Some(guild_id), Ok(channel_id)) = (guild_id, channel_id.parse::<u64>())
+                    else {
+                        return false;
+                    };
+                    if channel_id == 0 {
+                        return false;
+                    }
+                    matches!(
+                        tokio::time::timeout(
+                            Duration::from_secs(2),
+                            http.get_channel(ChannelId::new(channel_id)),
+                        )
+                        .await,
+                        Ok(Ok(Channel::Guild(channel)))
+                            if channel.guild_id == guild_id && channel.kind == ChannelType::Text
+                    )
+                },
             )
             .await
             .map_err(|_| GatewayEventDispatchError)?;
