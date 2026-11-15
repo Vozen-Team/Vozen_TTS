@@ -83,29 +83,55 @@ where
         invocation: TtsFileExportInvocation<'_>,
         synthesizer: &impl CommandSpeechSynthesizer,
     ) -> TtsFileExportOutcome {
+        match self.prepare(invocation) {
+            Ok(request) => synthesize_prepared(&request, synthesizer).await,
+            Err(outcome) => outcome,
+        }
+    }
+}
+
+/// Synthesizes a request already accepted by [`TtsFileExportService::prepare`].
+pub async fn synthesize_prepared(
+    request: &vozen_core::SynthRequest,
+    synthesizer: &impl CommandSpeechSynthesizer,
+) -> TtsFileExportOutcome {
+    synthesizer
+        .synthesize(request)
+        .await
+        .map(TtsFileExportOutcome::Ready)
+        .unwrap_or(TtsFileExportOutcome::SynthesisFailed)
+}
+
+impl<S> TtsFileExportService<S> {
+    /// Validates, rate-limits and prepares an export without synthesizing it. Callers that bound
+    /// synthesis capacity run this first, so a rate-limited user never takes or waits for a slot.
+    pub fn prepare(
+        &self,
+        invocation: TtsFileExportInvocation<'_>,
+    ) -> Result<vozen_core::SynthRequest, TtsFileExportOutcome> {
         let raw = invocation.raw.trim();
         // Mirror the command handler: reject non-readable input before spending a token.
         if !has_readable_text(raw) {
-            return TtsFileExportOutcome::Empty;
+            return Err(TtsFileExportOutcome::Empty);
         }
         // Discord validates `max_length`, but the application must retain the bound for old/stale
         // commands and forged payloads. JavaScript's existing contract counts UTF-16 code units.
         if raw.encode_utf16().count() > MAX_TTS_FILE_CHARS {
-            return TtsFileExportOutcome::TooLong;
+            return Err(TtsFileExportOutcome::TooLong);
         }
         let now_ms = (self.now_ms)();
         let prepared = {
             let store = match self.store.lock() {
                 Ok(store) => store,
-                Err(_) => return TtsFileExportOutcome::StoreUnavailable,
+                Err(_) => return Err(TtsFileExportOutcome::StoreUnavailable),
             };
             let mut limiters = match self.rate_limiters.lock() {
                 Ok(limiters) => limiters,
-                Err(_) => return TtsFileExportOutcome::StoreUnavailable,
+                Err(_) => return Err(TtsFileExportOutcome::StoreUnavailable),
             };
             let config = match store.guild_config(invocation.preference_scope) {
                 Ok(config) => config,
-                Err(_) => return TtsFileExportOutcome::StoreUnavailable,
+                Err(_) => return Err(TtsFileExportOutcome::StoreUnavailable),
             };
             if !limiters.allow(
                 invocation.preference_scope,
@@ -113,7 +139,7 @@ where
                 config.rate_per_min,
                 now_ms,
             ) {
-                return TtsFileExportOutcome::RateLimited;
+                return Err(TtsFileExportOutcome::RateLimited);
             }
             let detected_language = store
                 .is_detection_on(invocation.preference_scope, invocation.user_id)
@@ -145,20 +171,16 @@ where
 
         let request = match prepared {
             Ok(MessagePreparationOutcome::Ready(speech)) => speech.request,
-            Ok(MessagePreparationOutcome::Empty) => return TtsFileExportOutcome::Empty,
+            Ok(MessagePreparationOutcome::Empty) => return Err(TtsFileExportOutcome::Empty),
             Ok(MessagePreparationOutcome::FullyBlocked) => {
-                return TtsFileExportOutcome::FullyBlocked;
+                return Err(TtsFileExportOutcome::FullyBlocked);
             }
-            Err(_) => return TtsFileExportOutcome::StoreUnavailable,
+            Err(_) => return Err(TtsFileExportOutcome::StoreUnavailable),
         };
         if !request_models_available(&request, &self.settings.available_models) {
-            return TtsFileExportOutcome::VoiceUnavailable;
+            return Err(TtsFileExportOutcome::VoiceUnavailable);
         }
-        synthesizer
-            .synthesize(&request)
-            .await
-            .map(TtsFileExportOutcome::Ready)
-            .unwrap_or(TtsFileExportOutcome::SynthesisFailed)
+        Ok(request)
     }
 
     pub fn forget_scope(&self, scope: &str) {
@@ -325,6 +347,48 @@ mod tests {
             service.execute(invocation()).await,
             TtsFileExportOutcome::RateLimited
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_rate_limits_without_synthesizing() {
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
+        store
+            .lock()
+            .expect("store")
+            .update_guild_config(
+                "guild",
+                GuildConfigPatch {
+                    rate_per_min: Some(1),
+                    ..GuildConfigPatch::default()
+                },
+            )
+            .expect("config");
+        let service = TtsFileExportService::new(
+            store,
+            FakeSynthesizer::default(),
+            settings(),
+            Arc::new(|| 0),
+        );
+        let invocation = || TtsFileExportInvocation {
+            guild_id: Some("guild"),
+            preference_scope: "guild",
+            user_id: "user",
+            raw: "hello",
+        };
+        let request = service
+            .prepare(invocation())
+            .expect("first request accepted");
+        assert_eq!(
+            service.prepare(invocation()).unwrap_err(),
+            TtsFileExportOutcome::RateLimited
+        );
+        let synthesizer = FakeSynthesizer::default();
+        assert!(matches!(
+            synthesize_prepared(&request, &synthesizer).await,
+            TtsFileExportOutcome::Ready(_)
+        ));
+        assert_eq!(synthesizer.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(service.synthesizer.calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

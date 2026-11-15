@@ -19,6 +19,7 @@ use serenity::{
 use vozen_discord::{
     GatewayEventDispatchError, GatewayEventSink, TtsFileExportInvocation, TtsFileExportOutcome,
     TtsFileExportService, VoiceResponseLocalizer, parse_tts_file_command,
+    synthesize_prepared_tts_file,
 };
 use vozen_store::SqliteStore;
 
@@ -149,6 +150,30 @@ impl TtsFileGatewaySink {
             .render_key(key, Some(interaction_locale), guild_locale, parameters)
             .ok_or(GatewayEventDispatchError)
     }
+
+    fn outcome_message(
+        &self,
+        outcome: &TtsFileExportOutcome,
+        interaction_locale: &str,
+        guild_locale: Option<&str>,
+    ) -> Result<String, GatewayEventDispatchError> {
+        let mut parameters = BTreeMap::new();
+        let key = match outcome {
+            TtsFileExportOutcome::TooLong => {
+                parameters.insert("max", vozen_discord::MAX_TTS_FILE_CHARS.to_string());
+                "ttsFile.tooLong"
+            }
+            TtsFileExportOutcome::Empty => "tts.nothingToRead",
+            TtsFileExportOutcome::RateLimited => "tts.tooFast",
+            TtsFileExportOutcome::FullyBlocked => "tts.blocked",
+            TtsFileExportOutcome::VoiceUnavailable => "ttsFile.unavailable",
+            TtsFileExportOutcome::SynthesisFailed | TtsFileExportOutcome::StoreUnavailable => {
+                "ttsFile.failed"
+            }
+            TtsFileExportOutcome::Ready(_) => "ttsFile.ready",
+        };
+        self.message(key, interaction_locale, guild_locale, &parameters)
+    }
 }
 
 #[async_trait::async_trait]
@@ -183,11 +208,33 @@ impl GatewayEventSink for TtsFileGatewaySink {
         let guild_id = command.guild_id.map(|id| id.get().to_string());
         let preference_scope = guild_id.as_deref().unwrap_or("@user-app");
         let user_id = command.user.id.get().to_string();
-        let permit = self
-            .export_slots
-            .acquire()
-            .await
-            .map_err(|_| GatewayEventDispatchError)?;
+        let guild_locale = command.guild_locale.as_deref();
+        // Validate and rate-limit before touching the shared export capacity, then fail fast when
+        // every slot is taken instead of queueing an unbounded number of deferred interactions.
+        let request = match self.service.prepare(TtsFileExportInvocation {
+            guild_id: guild_id.as_deref(),
+            preference_scope,
+            user_id: &user_id,
+            raw: &parsed.text,
+        }) {
+            Ok(request) => request,
+            Err(outcome) => {
+                let content = self.outcome_message(&outcome, &command.locale, guild_locale)?;
+                command
+                    .edit_response(&context, EditInteractionResponse::new().content(content))
+                    .await
+                    .map_err(|_| GatewayEventDispatchError)?;
+                return Ok(());
+            }
+        };
+        let Ok(permit) = self.export_slots.try_acquire() else {
+            let busy = self.message("tts.busy", &command.locale, guild_locale, &BTreeMap::new())?;
+            command
+                .edit_response(&context, EditInteractionResponse::new().content(busy))
+                .await
+                .map_err(|_| GatewayEventDispatchError)?;
+            return Ok(());
+        };
         let workspace = PrivateExportWorkspace::new().map_err(|_| GatewayEventDispatchError)?;
         // Each request gets a separate cache namespace, so identical concurrent exports
         // cannot delete or reuse another request's audio. The shared semaphore bounds Piper.
@@ -199,56 +246,8 @@ impl GatewayEventSink for TtsFileGatewaySink {
                 1,
                 EXPORT_SYNTHESIS_TIMEOUT,
             ));
-        let outcome = self
-            .service
-            .execute_with_synthesizer(
-                TtsFileExportInvocation {
-                    guild_id: guild_id.as_deref(),
-                    preference_scope,
-                    user_id: &user_id,
-                    raw: &parsed.text,
-                },
-                &synthesizer,
-            )
-            .await;
-        let parameters = BTreeMap::new();
-        let guild_locale = command.guild_locale.as_deref();
-        let content = match &outcome {
-            TtsFileExportOutcome::TooLong => {
-                let mut parameters = BTreeMap::new();
-                parameters.insert("max", vozen_discord::MAX_TTS_FILE_CHARS.to_string());
-                self.message(
-                    "ttsFile.tooLong",
-                    &command.locale,
-                    guild_locale,
-                    &parameters,
-                )?
-            }
-            TtsFileExportOutcome::Empty => self.message(
-                "tts.nothingToRead",
-                &command.locale,
-                guild_locale,
-                &parameters,
-            )?,
-            TtsFileExportOutcome::RateLimited => {
-                self.message("tts.tooFast", &command.locale, guild_locale, &parameters)?
-            }
-            TtsFileExportOutcome::FullyBlocked => {
-                self.message("tts.blocked", &command.locale, guild_locale, &parameters)?
-            }
-            TtsFileExportOutcome::VoiceUnavailable => self.message(
-                "ttsFile.unavailable",
-                &command.locale,
-                guild_locale,
-                &parameters,
-            )?,
-            TtsFileExportOutcome::SynthesisFailed | TtsFileExportOutcome::StoreUnavailable => {
-                self.message("ttsFile.failed", &command.locale, guild_locale, &parameters)?
-            }
-            TtsFileExportOutcome::Ready(_) => {
-                self.message("ttsFile.ready", &command.locale, guild_locale, &parameters)?
-            }
-        };
+        let outcome = synthesize_prepared_tts_file(&request, &synthesizer).await;
+        let content = self.outcome_message(&outcome, &command.locale, guild_locale)?;
         let response = match outcome {
             TtsFileExportOutcome::Ready(path) => {
                 // Read the private temporary audio into memory and remove it before delivery.
@@ -310,6 +309,22 @@ impl GatewayEventSink for TtsFileGatewaySink {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn saturated_export_slots_have_a_localized_busy_reply() {
+        let slots = tokio::sync::Semaphore::new(1);
+        let held = slots.try_acquire().expect("first slot");
+        assert!(slots.try_acquire().is_err(), "a full pool must not queue");
+        drop(held);
+        let localizer = VoiceResponseLocalizer::from_generated_contract().expect("contract");
+        for locale in ["en-US", "pt-BR"] {
+            assert!(
+                localizer
+                    .render_key("tts.busy", Some(locale), None, &BTreeMap::new())
+                    .is_some_and(|text| !text.is_empty())
+            );
+        }
+    }
 
     #[tokio::test]
     async fn private_export_attachment_keeps_upload_bytes_but_removes_disk_audio() {

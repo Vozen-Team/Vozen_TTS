@@ -61,6 +61,10 @@ pub struct MessageVoiceService<S, P> {
     /// Snapshot reader. During staging primary-read validation this is a refreshed in-memory
     /// replica sourced from Postgres, never a network call from the message handler.
     read_store: Arc<Mutex<SqliteStore>>,
+    /// Reports whether `read_store` is recent enough to serve. When it returns false, snapshots
+    /// are read from the authoritative `store` instead, so a stalled replica refresh cannot keep
+    /// serving old blocklist or premium state.
+    read_store_fresh: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pipeline: Mutex<MessageSpeechPipeline>,
     duplicate_tracker: Mutex<DuplicateTracker>,
     count_gate: Mutex<CountGate>,
@@ -175,6 +179,7 @@ impl<S, P> MessageVoiceService<S, P> {
         Self {
             store: store.clone(),
             read_store,
+            read_store_fresh: None,
             pipeline: Mutex::new(MessageSpeechPipeline::default()),
             duplicate_tracker: Mutex::new(DuplicateTracker::default()),
             count_gate: Mutex::new(CountGate::default()),
@@ -187,6 +192,20 @@ impl<S, P> MessageVoiceService<S, P> {
             settings,
             now_ms,
             metrics,
+        }
+    }
+
+    /// Falls back to the authoritative store whenever `fresh` reports the read store as stale.
+    #[must_use]
+    pub fn with_read_store_freshness(mut self, fresh: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.read_store_fresh = Some(fresh);
+        self
+    }
+
+    fn voice_read_source(&self) -> &Arc<Mutex<SqliteStore>> {
+        match &self.read_store_fresh {
+            Some(fresh) if !fresh() => &self.store,
+            _ => &self.read_store,
         }
     }
 }
@@ -229,7 +248,7 @@ where
         let received_at = Instant::now();
         let now_ms = (self.now_ms)();
         let mut voice_data = match self.voice_data.snapshot(
-            &self.read_store,
+            self.voice_read_source(),
             invocation.facts.guild_id,
             invocation.facts.channel_id,
             invocation.facts.author_id,
@@ -1251,5 +1270,31 @@ mod tests {
                 ("es_ES-davefx-medium".to_owned(), SynthesisEngine::Piper),
             ]
         );
+    }
+
+    #[test]
+    fn stale_read_store_falls_back_to_the_authoritative_store() {
+        let write_store = configured_store();
+        let read_store = configured_store();
+        let fresh = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = fresh.clone();
+        let service =
+            MessageVoiceService::new_with_synthesis_coordinator_runtime_batch_and_read_store(
+                write_store.clone(),
+                read_store.clone(),
+                CapturingSynthesizer::default(),
+                FakePlayback {
+                    reserve: true,
+                    enqueued: AtomicUsize::new(0),
+                },
+                GuildSynthesisCoordinator::default(),
+                settings(),
+                Arc::new(|| 0),
+                RuntimeBatchBuffer::default(),
+            )
+            .with_read_store_freshness(Arc::new(move || flag.load(Ordering::Relaxed)));
+        assert!(Arc::ptr_eq(service.voice_read_source(), &read_store));
+        fresh.store(false, Ordering::Relaxed);
+        assert!(Arc::ptr_eq(service.voice_read_source(), &write_store));
     }
 }

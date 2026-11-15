@@ -28,6 +28,31 @@ pub const OPEN_ID: &str = "vozen:setup:open";
 const PREFIX: &str = "vozen:setup:";
 const SESSION_TTL_MS: i64 = 15 * 60 * 1_000;
 const SESSION_LIMIT: usize = 2_048;
+// Bounds how much of the global session pool one guild can occupy.
+const GUILD_SESSION_LIMIT: usize = 8;
+
+/// Stores a new wizard session, replacing any earlier session for the same guild member.
+/// Expired sessions are pruned first; the guild and global caps are then enforced.
+fn insert_session(
+    sessions: &mut BTreeMap<String, PendingSetup>,
+    nonce: String,
+    session: PendingSetup,
+    now: i64,
+) -> Result<(), ()> {
+    sessions.retain(|_, s| {
+        now - s.issued_at < SESSION_TTL_MS
+            && !(s.guild_id == session.guild_id && s.user_id == session.user_id)
+    });
+    let in_guild = sessions
+        .values()
+        .filter(|s| s.guild_id == session.guild_id)
+        .count();
+    if in_guild >= GUILD_SESSION_LIMIT || sessions.len() >= SESSION_LIMIT {
+        return Err(());
+    }
+    sessions.insert(nonce, session);
+    Ok(())
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SetupPage {
@@ -546,11 +571,13 @@ impl SetupGatewaySink {
         session.choose_category = categories.len() > 1;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let mut sessions = self.sessions.lock().map_err(|_| text("error.generic"))?;
-        sessions.retain(|_, s| crate::system_now_ms() - s.issued_at < SESSION_TTL_MS);
-        if sessions.len() >= SESSION_LIMIT {
-            return Err(text("error.generic"));
-        }
-        sessions.insert(nonce.clone(), session.clone());
+        insert_session(
+            &mut sessions,
+            nonce.clone(),
+            session.clone(),
+            crate::system_now_ms(),
+        )
+        .map_err(|_| text("error.generic"))?;
         Ok((nonce, session))
     }
 
@@ -1341,6 +1368,69 @@ mod tests {
         let embed = serde_json::to_value(wizard_embed(&session, &localizer)).unwrap();
         assert!(embed["fields"].is_null());
         assert_eq!(rows[0]["components"][0]["default_values"][0]["id"], 77);
+    }
+
+    #[test]
+    fn session_insert_replaces_member_session_and_caps_each_guild() {
+        let mut sessions = BTreeMap::new();
+        insert_session(
+            &mut sessions,
+            "a".into(),
+            PendingSetup::new(7, 42, 100),
+            100,
+        )
+        .unwrap();
+        insert_session(
+            &mut sessions,
+            "b".into(),
+            PendingSetup::new(7, 42, 101),
+            101,
+        )
+        .unwrap();
+        assert!(!sessions.contains_key("a") && sessions.contains_key("b"));
+        assert_eq!(sessions.len(), 1);
+        for user in 0..(GUILD_SESSION_LIMIT as u64 - 1) {
+            insert_session(
+                &mut sessions,
+                format!("g7-{user}"),
+                PendingSetup::new(7, user, 102),
+                102,
+            )
+            .unwrap();
+        }
+        assert!(
+            insert_session(
+                &mut sessions,
+                "full".into(),
+                PendingSetup::new(7, 99, 103),
+                103
+            )
+            .is_err()
+        );
+        // A member already holding a slot can still reopen, and other guilds are unaffected.
+        insert_session(
+            &mut sessions,
+            "c".into(),
+            PendingSetup::new(7, 42, 104),
+            104,
+        )
+        .unwrap();
+        insert_session(
+            &mut sessions,
+            "d".into(),
+            PendingSetup::new(8, 99, 104),
+            104,
+        )
+        .unwrap();
+        // Expired sessions free their guild slot.
+        insert_session(
+            &mut sessions,
+            "late".into(),
+            PendingSetup::new(7, 99, 104 + SESSION_TTL_MS),
+            104 + SESSION_TTL_MS,
+        )
+        .unwrap();
+        assert_eq!(sessions.len(), 1);
     }
 
     #[test]

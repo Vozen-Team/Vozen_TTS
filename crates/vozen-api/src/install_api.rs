@@ -4,6 +4,7 @@
 //! authorization codes and the one-time replay record stay server-side.
 
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -11,7 +12,7 @@ use std::{
 use axum::{
     Router,
     extract::{Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -28,6 +29,18 @@ const STATE_TTL_MS: i64 = 10 * 60 * 1_000;
 const DISCORD_TOKEN_ENDPOINT: &str = "https://discord.com/api/v10/oauth2/token";
 const DISCORD_AUTHORIZE_ENDPOINT: &str = "https://discord.com/oauth2/authorize";
 const TTS_PERMISSIONS: &str = "326420745232";
+// The unauthenticated start route writes one SQLite row per hit, so both the per-client rate and
+// the number of live unconsumed states are bounded.
+const START_RATE_MAX: usize = 10;
+const START_RATE_WINDOW_MS: i64 = 60 * 1_000;
+const RATE_MAX_ENTRIES: usize = 2_048;
+const MAX_PENDING_STATES: usize = 5_000;
+
+#[derive(Clone, Copy)]
+struct RateState {
+    count: usize,
+    reset: i64,
+}
 
 #[derive(Clone)]
 pub struct InstallApiConfig {
@@ -74,6 +87,7 @@ struct InstallState {
     store: Arc<Mutex<SqliteStore>>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
     client: Client,
+    rate: Arc<Mutex<HashMap<String, RateState>>>,
 }
 
 pub fn install_router(config: InstallApiConfig) -> Result<Router, InstallApiConfigError> {
@@ -94,6 +108,7 @@ pub fn install_router(config: InstallApiConfig) -> Result<Router, InstallApiConf
             store: config.store,
             now: config.now,
             client,
+            rate: Arc::new(Mutex::new(HashMap::new())),
         }))
 }
 
@@ -143,11 +158,15 @@ struct StartQuery {
 
 async fn start(
     State(state): State<InstallState>,
+    headers: HeaderMap,
     Query(query): Query<StartQuery>,
 ) -> Result<Response, InstallResponseError> {
+    let now = (state.now)();
+    if rate_limited(&state, client_ip(&headers), now) {
+        return Err(InstallResponseError::TooManyRequests("rate_limited"));
+    }
     let source = install_source(query.source.as_deref())
         .ok_or(InstallResponseError::BadRequest("invalid_install_source"))?;
-    let now = (state.now)();
     let payload = format!(
         "{source}|{}|{}",
         now.saturating_add(STATE_TTL_MS),
@@ -162,6 +181,12 @@ async fn start(
     // A best-effort sweep keeps the replay table bounded without a separate
     // scheduler. It cannot affect the newly-created state.
     let _ = store.purge_install_oauth_states(now);
+    let pending = store
+        .count_pending_install_oauth_states(now)
+        .map_err(|_| InstallResponseError::Internal)?;
+    if pending >= MAX_PENDING_STATES {
+        return Err(InstallResponseError::TooManyRequests("install_busy"));
+    }
     store
         .register_install_oauth_state(&state_hash, now.saturating_add(STATE_TTL_MS))
         .map_err(|_| InstallResponseError::Internal)?;
@@ -257,6 +282,41 @@ async fn callback(
     ))
 }
 
+/// Same trusted-proxy rule as the other public routes: the reverse proxy appends the client
+/// address, so only the last `X-Forwarded-For` entry is used.
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|header| header.to_str().ok())
+        .and_then(|value| value.rsplit(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn rate_limited(state: &InstallState, client_ip: String, now: i64) -> bool {
+    let Ok(mut rate) = state.rate.lock() else {
+        return true;
+    };
+    rate.retain(|_, value| value.reset > now);
+    if !rate.contains_key(&client_ip)
+        && rate.len() >= RATE_MAX_ENTRIES
+        && let Some(oldest) = rate
+            .iter()
+            .min_by_key(|(_, value)| value.reset)
+            .map(|(key, _)| key.clone())
+    {
+        rate.remove(&oldest);
+    }
+    let entry = rate.entry(client_ip).or_insert(RateState {
+        count: 0,
+        reset: now + START_RATE_WINDOW_MS,
+    });
+    entry.count += 1;
+    entry.count > START_RATE_MAX
+}
+
 fn redirect_outcome(base: &str, outcome: &str) -> Response {
     let mut url = url::Url::parse(base).expect("validated success URL");
     url.query_pairs_mut()
@@ -318,6 +378,7 @@ fn verified_guild_id(body: &serde_json::Value) -> Option<&str> {
 
 enum InstallResponseError {
     BadRequest(&'static str),
+    TooManyRequests(&'static str),
     BadGateway,
     Internal,
 }
@@ -325,6 +386,7 @@ impl IntoResponse for InstallResponseError {
     fn into_response(self) -> Response {
         let (status, code) = match self {
             Self::BadRequest(code) => (StatusCode::BAD_REQUEST, code),
+            Self::TooManyRequests(code) => (StatusCode::TOO_MANY_REQUESTS, code),
             Self::BadGateway => (StatusCode::BAD_GATEWAY, "discord_unavailable"),
             Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         };
@@ -384,6 +446,82 @@ mod tests {
         assert_eq!(
             install_source(Some("discordbotlist")),
             Some("discordbotlist")
+        );
+    }
+
+    fn test_router(store: Arc<Mutex<SqliteStore>>) -> Router {
+        install_router(InstallApiConfig {
+            client_id: "123".into(),
+            client_secret: "secret".into(),
+            redirect_uri: "https://api.vozen.org/api/install/tts/callback".into(),
+            success_redirect: "https://vozen.org/dashboard/".into(),
+            state_secret: "a-secret-with-at-least-thirty-two-chars".into(),
+            store,
+            now: Arc::new(|| 1_000),
+        })
+        .unwrap()
+    }
+
+    fn start_request(xff: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::get("/api/install/tts/start?source=discordbotlist")
+            .header("x-forwarded-for", xff)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn start_is_rate_limited_per_trusted_client_ip() {
+        use tower::ServiceExt;
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        let app = test_router(store.clone());
+        for forged in 0..START_RATE_MAX {
+            let response = app
+                .clone()
+                .oneshot(start_request(&format!("10.0.0.{forged}, 192.0.2.9")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        }
+        let blocked = app
+            .clone()
+            .oneshot(start_request("203.0.113.7, 192.0.2.9"))
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+        let other = app.oneshot(start_request("192.0.2.10")).await.unwrap();
+        assert_eq!(other.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .count_pending_install_oauth_states(1_000)
+                .unwrap(),
+            START_RATE_MAX + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn start_refuses_new_state_rows_at_the_pending_cap() {
+        use tower::ServiceExt;
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        {
+            let store = store.lock().unwrap();
+            for index in 0..MAX_PENDING_STATES {
+                store
+                    .register_install_oauth_state(&format!("pending-{index}"), 1_000 + STATE_TTL_MS)
+                    .unwrap();
+            }
+        }
+        let app = test_router(store.clone());
+        let refused = app.oneshot(start_request("192.0.2.1")).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .count_pending_install_oauth_states(1_000)
+                .unwrap(),
+            MAX_PENDING_STATES
         );
     }
 

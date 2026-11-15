@@ -33,6 +33,17 @@ impl SqliteStore {
         Ok(changed == 1)
     }
 
+    /// Counts unconsumed states that can still be redeemed, so the public start
+    /// route can refuse new rows once the replay table reaches its bound.
+    pub fn count_pending_install_oauth_states(&self, now: i64) -> Result<usize, StoreError> {
+        let count: i64 = self.connection().query_row(
+            "SELECT COUNT(*) FROM install_oauth_state WHERE used_at IS NULL AND expires_at >= ?1",
+            [now],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
     pub fn purge_install_oauth_states(&self, now: i64) -> Result<usize, StoreError> {
         Ok(self.connection().execute(
             "DELETE FROM install_oauth_state WHERE expires_at < ?1 OR used_at IS NOT NULL",
@@ -68,6 +79,27 @@ mod tests {
             !store
                 .consume_install_oauth_state("expired", 1_000)
                 .expect("expired")
+        );
+    }
+
+    #[test]
+    fn pending_count_excludes_used_and_expired_states() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        for (hash, expires_at) in [("live", 2_000), ("used", 2_000), ("expired", 999)] {
+            store
+                .register_install_oauth_state(hash, expires_at)
+                .expect("register");
+        }
+        assert!(
+            store
+                .consume_install_oauth_state("used", 1_000)
+                .expect("consume")
+        );
+        assert_eq!(
+            store
+                .count_pending_install_oauth_states(1_000)
+                .expect("count"),
+            1
         );
     }
 }

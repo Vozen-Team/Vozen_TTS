@@ -5,7 +5,7 @@
 
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use sqlx::PgPool;
@@ -13,6 +13,8 @@ use thiserror::Error;
 use vozen_store::SqliteStore;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_SNAPSHOT_AGE: Duration = Duration::from_secs(60);
+const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 const IMPORT_MARKER: &str = "sqlite_initial_import_v1";
 const VOICE_CACHE_TABLES: &[&str] = &[
     "blocklist",
@@ -190,14 +192,87 @@ fn replace_snapshot_if_fresh(
     Ok(())
 }
 
-pub fn spawn(pool: PgPool, store: Arc<Mutex<SqliteStore>>) {
+/// Tracks whether the local Postgres snapshot is recent enough to serve voice reads. Once refreshes
+/// keep failing or the snapshot ages past the bound, callers read the authoritative SQLite store
+/// instead, so blocklist and premium edits cannot be served stale indefinitely.
+#[derive(Clone)]
+pub struct VoiceCacheFreshness {
+    state: Arc<Mutex<FreshnessState>>,
+}
+
+struct FreshnessState {
+    last_success: Instant,
+    consecutive_failures: u32,
+}
+
+impl Default for VoiceCacheFreshness {
+    /// Starts fresh: callers create this right after a successful initial `load`.
+    fn default() -> Self {
+        Self::new_at(Instant::now())
+    }
+}
+
+impl VoiceCacheFreshness {
+    fn new_at(now: Instant) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(FreshnessState {
+                last_success: now,
+                consecutive_failures: 0,
+            })),
+        }
+    }
+
+    fn record_success_at(&self, now: Instant) {
+        if let Ok(mut state) = self.state.lock() {
+            state.last_success = now;
+            state.consecutive_failures = 0;
+        }
+    }
+
+    fn record_failure(&self) -> u32 {
+        self.state
+            .lock()
+            .map(|mut state| {
+                state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                state.consecutive_failures
+            })
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn is_fresh(&self) -> bool {
+        self.is_fresh_at(Instant::now())
+    }
+
+    fn is_fresh_at(&self, now: Instant) -> bool {
+        // A poisoned lock fails closed to the authoritative store.
+        self.state.lock().is_ok_and(|state| {
+            state.consecutive_failures < MAX_CONSECUTIVE_FAILURES
+                && now.saturating_duration_since(state.last_success) <= MAX_SNAPSHOT_AGE
+        })
+    }
+}
+
+pub fn spawn(pool: PgPool, store: Arc<Mutex<SqliteStore>>, freshness: VoiceCacheFreshness) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(REFRESH_INTERVAL);
         loop {
             interval.tick().await;
-            if let Err(error) = refresh_once(&pool, &store).await {
-                // Keep the last known-good local cache; a remote failure must never stall voice.
-                eprintln!("[postgres] voice-cache refresh deferred: {error}");
+            match refresh_once(&pool, &store).await {
+                Ok(()) => {
+                    if !freshness.is_fresh() {
+                        eprintln!("[postgres] voice-cache refreshed; serving Postgres snapshot");
+                    }
+                    freshness.record_success_at(Instant::now());
+                }
+                Err(error) => {
+                    // Keep the last known-good local cache for a bounded time; past that bound,
+                    // voice reads fall back to the authoritative SQLite store.
+                    let failures = freshness.record_failure();
+                    eprintln!("[postgres] voice-cache refresh deferred: {error}");
+                    if failures == MAX_CONSECUTIVE_FAILURES {
+                        eprintln!("[postgres] voice-cache stale; voice reads use local SQLite");
+                    }
+                }
             }
         }
     });
@@ -207,6 +282,23 @@ pub fn spawn(pool: PgPool, store: Arc<Mutex<SqliteStore>>) {
 mod tests {
     use super::*;
     use vozen_store::GuildConfigPatch;
+
+    #[test]
+    fn snapshot_goes_stale_after_repeated_failures_or_age_and_recovers() {
+        let start = Instant::now();
+        let freshness = VoiceCacheFreshness::new_at(start);
+        assert!(freshness.is_fresh_at(start + MAX_SNAPSHOT_AGE));
+        assert!(!freshness.is_fresh_at(start + MAX_SNAPSHOT_AGE + Duration::from_secs(1)));
+        for _ in 1..MAX_CONSECUTIVE_FAILURES {
+            freshness.record_failure();
+            assert!(freshness.is_fresh_at(start));
+        }
+        freshness.record_failure();
+        assert!(!freshness.is_fresh_at(start));
+        let later = start + Duration::from_secs(120);
+        freshness.record_success_at(later);
+        assert!(freshness.is_fresh_at(later));
+    }
 
     #[test]
     fn malformed_import_markers_fail_closed() {
