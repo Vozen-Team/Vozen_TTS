@@ -123,10 +123,17 @@ impl<T, S, P> CoreVoiceInteractionExecutor<T, S, P> {
     }
 
     pub fn requires_public_defer(command: &CommandData) -> Result<bool, CoreVoiceExecutionError> {
-        Ok(matches!(
-            parse_promoted_core_voice(command).map_err(|_| CoreVoiceExecutionError::Command)?,
-            Some(crate::CoreVoiceCommand::MicroFun { .. })
-        ))
+        Ok(parse_promoted_core_voice(command)
+            .map_err(|_| CoreVoiceExecutionError::Command)?
+            .as_ref()
+            .is_some_and(Self::uses_public_defer))
+    }
+
+    fn uses_public_defer(command: &crate::CoreVoiceCommand) -> bool {
+        matches!(
+            command,
+            crate::CoreVoiceCommand::Join | crate::CoreVoiceCommand::MicroFun { .. }
+        )
     }
 }
 
@@ -158,7 +165,7 @@ where
                 | crate::CoreVoiceCommand::Sound { .. }
                 | crate::CoreVoiceCommand::VoicePreview { .. }
         );
-        let defer_public = matches!(command, crate::CoreVoiceCommand::MicroFun { .. });
+        let defer_public = Self::uses_public_defer(&command);
         let outcome = if let crate::CoreVoiceCommand::VoicePreview { model, engine } = &command {
             let guild_locale = self.guild_locale(facts);
             let configured_model = model
@@ -505,6 +512,95 @@ mod tests {
         }
     }
 
+    struct RejectJoin(VoiceSessionTransportError);
+
+    #[async_trait]
+    impl VoiceSessionTransport for RejectJoin {
+        async fn join(&self, guild: &str, channel: &str) -> Result<(), VoiceSessionTransportError> {
+            assert_eq!((guild, channel), ("7", "88"));
+            Err(self.0)
+        }
+
+        async fn leave(&self, _: &str) -> Result<(), VoiceSessionTransportError> {
+            panic!("the existing call must stay connected")
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_join_reports_failed_transport_without_replacing_existing_presence() {
+        let facts = CoreVoiceInteractionFacts {
+            guild_id: "7".into(),
+            channel_id: "77".into(),
+            user_id: "42".into(),
+            member_role_ids: Some(vec![]),
+        };
+        let data = command(r#"{"id":"1","name":"join","type":1,"options":[]}"#);
+        let localizer = VoiceResponseLocalizer::from_generated_contract().unwrap();
+        for (error, key, parameters) in [
+            (
+                VoiceSessionTransportError::PermissionDenied,
+                "join.missingPerms",
+                BTreeMap::from([("channel", "<#88>".into())]),
+            ),
+            (
+                VoiceSessionTransportError::Failed,
+                "error.generic",
+                BTreeMap::new(),
+            ),
+        ] {
+            let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+            store
+                .lock()
+                .unwrap()
+                .remember_voice_presence("7", "99", 1)
+                .unwrap();
+            let state = GatewayState::default();
+            state.remember_bot_user("100".into());
+            state.set_bot_voice_channel("7", Some("99".into()));
+            state.update_voice_state("7", "42", Some("88".into()));
+            let executor = CoreVoiceInteractionExecutor::new(
+                store.clone(),
+                state.clone(),
+                RejectJoin(error),
+                NoAudio,
+                NoAudio,
+                CoreVoiceSettings {
+                    available_models: vec!["en_US-amy-medium".into()],
+                    default_voice: "en_US-amy-medium".into(),
+                    default_speed: 1.0,
+                    default_engine: SynthesisEngine::Piper,
+                },
+                Arc::new(|| 100),
+            )
+            .unwrap();
+            let reply = executor
+                .execute(&data, &facts, Some("en-US"), &|_| "someone".into(), &|_| {
+                    "channel".into()
+                })
+                .await
+                .unwrap();
+            let CoreVoiceInteractionExecution::Reply {
+                content,
+                defer_public,
+                defer_ephemeral,
+            } = reply
+            else {
+                panic!("expected a join reply");
+            };
+            assert!(defer_public && !defer_ephemeral);
+            assert_eq!(
+                content,
+                localizer
+                    .render_key(key, Some("en"), None, &parameters)
+                    .unwrap(),
+            );
+            assert_eq!(state.bot_voice_channel_id("7").as_deref(), Some("99"));
+            let presences = store.lock().unwrap().voice_presences().unwrap();
+            assert_eq!(presences.len(), 1);
+            assert_eq!(presences[0].channel_id, "99");
+        }
+    }
+
     #[tokio::test]
     async fn private_responses_follow_the_user_and_public_responses_follow_saved_server_language() {
         let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
@@ -563,12 +659,13 @@ mod tests {
             let CoreVoiceInteractionExecution::Reply {
                 content,
                 defer_ephemeral,
-                ..
+                defer_public,
             } = result
             else {
                 panic!("claimed command")
             };
             assert_eq!(defer_ephemeral, private);
+            assert_eq!(defer_public, !private);
             let expected = localizer
                 .render_key(
                     if private {
@@ -631,7 +728,11 @@ mod tests {
     }
 
     #[test]
-    fn public_micro_fun_commands_defer_publicly_but_other_commands_do_not() {
+    fn join_and_public_micro_fun_commands_defer_publicly() {
+        let join = command(r#"{"id":"1","name":"join","type":1,"options":[]}"#);
+        assert!(
+            CoreVoiceInteractionExecutor::<(), (), ()>::requires_public_defer(&join).expect("join")
+        );
         let eight_ball = command(
             r#"{"id":"1","name":"8-ball","type":1,"options":[{"name":"question","type":3,"value":"Will it work?"},{"name":"language","type":3,"value":"en"},{"name":"engine","type":3,"value":"piper"}]}"#,
         );
