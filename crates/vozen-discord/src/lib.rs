@@ -273,6 +273,7 @@ pub use explicit_translation::{
 pub use file_export_command::{TtsFileCommand, TtsFileCommandError, parse_tts_file_command};
 pub use file_export_service::{
     MAX_TTS_FILE_CHARS, TtsFileExportInvocation, TtsFileExportOutcome, TtsFileExportService,
+    synthesize_prepared as synthesize_prepared_tts_file,
 };
 pub use game_action::{
     GameSpeech, GameStanding, RenderedGameAction, RenderedGameSegment, RenderedTextPart,

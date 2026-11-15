@@ -1374,6 +1374,7 @@ fn core_voice_event_sink(
     options: Option<CoreVoiceRuntimeOptions>,
     store: Arc<Mutex<SqliteStore>>,
     voice_read_store: Arc<Mutex<SqliteStore>>,
+    voice_read_fresh: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     gateway_state: GatewayState,
     runtime_batch: RuntimeBatchBuffer,
     planned_rejoin_marker: Option<PathBuf>,
@@ -1397,7 +1398,8 @@ fn core_voice_event_sink(
             options,
             runtime_batch,
             planned_rejoin_marker,
-        ),
+        )
+        .with_voice_read_freshness(voice_read_fresh),
     )))
 }
 
@@ -1958,6 +1960,7 @@ fn core_voice_event_sink(
     options: Option<CoreVoiceRuntimeOptions>,
     _store: Arc<Mutex<SqliteStore>>,
     _voice_read_store: Arc<Mutex<SqliteStore>>,
+    _voice_read_fresh: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     _gateway_state: GatewayState,
     _runtime_batch: RuntimeBatchBuffer,
     _planned_rejoin_marker: Option<PathBuf>,
@@ -2520,9 +2523,10 @@ async fn run() -> Result<(), RuntimeError> {
             .ok_or(RuntimeError::PostgresVoiceReadCacheRequiresReplica)?;
         match postgres_voice_cache::load(&postgres.pool()).await {
             Ok(cache) => {
-                postgres_voice_cache::spawn(postgres.pool(), cache.clone());
+                let freshness = postgres_voice_cache::VoiceCacheFreshness::default();
+                postgres_voice_cache::spawn(postgres.pool(), cache.clone(), freshness.clone());
                 eprintln!("[postgres] voice reads use the refreshed local Postgres cache");
-                Some(cache)
+                Some((cache, freshness))
             }
             Err(error) => {
                 // The Postgres cache is an optimization layered over the authoritative local
@@ -2629,10 +2633,18 @@ async fn run() -> Result<(), RuntimeError> {
         .as_ref()
         .and_then(|_| planned_rejoin_marker_path(&config.database_path));
     let mut event_sinks: Vec<Arc<dyn GatewayEventSink>> = Vec::new();
+    let (voice_read_store, voice_read_fresh) = match postgres_voice_read_store {
+        Some((cache, freshness)) => (
+            cache,
+            Some(Arc::new(move || freshness.is_fresh()) as Arc<dyn Fn() -> bool + Send + Sync>),
+        ),
+        None => (store.clone(), None),
+    };
     let voice_sink = core_voice_event_sink(
         config.core_voice,
         store.clone(),
-        postgres_voice_read_store.unwrap_or_else(|| store.clone()),
+        voice_read_store,
+        voice_read_fresh,
         gateway_state.clone(),
         runtime_batch_buffer.clone(),
         planned_rejoin_marker.clone(),
@@ -2860,6 +2872,7 @@ async fn run() -> Result<(), RuntimeError> {
         gateway_state.clone(),
         supabase_metrics.clone(),
     )?;
+    let app = with_request_timeout(app, HTTP_REQUEST_TIMEOUT);
     let listener = tokio::net::TcpListener::bind(health_bind).await?;
     if write_rejoin_marker_on_shutdown {
         tokio::select! {
@@ -2929,6 +2942,7 @@ async fn run_image_smoke() -> Result<(), RuntimeError> {
         GatewayState::default(),
         None,
     )?;
+    let app = with_request_timeout(app, HTTP_REQUEST_TIMEOUT);
     let listener = tokio::net::TcpListener::bind(health_bind).await?;
     eprintln!(
         "[image-smoke] SQLite and local health listener ready on http://{health_bind}/health"
@@ -3302,6 +3316,25 @@ fn build_http_router(
         }),
     })
     .map_err(RuntimeError::from)
+}
+
+/// Upper bound for one HTTP request, including reading its body inside extractors. The router has
+/// no streaming or long-poll routes, and outbound OAuth/Discord calls use shorter client timeouts.
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Answers `408 Request Timeout` and drops the handler future when a request exceeds `timeout`, so
+/// slow clients and stuck handlers cannot hold connections and tasks open indefinitely.
+fn with_request_timeout(router: axum::Router, timeout: Duration) -> axum::Router {
+    router.layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+            match tokio::time::timeout(timeout, next.run(request)).await {
+                Ok(response) => response,
+                Err(_) => axum::response::IntoResponse::into_response(
+                    axum::http::StatusCode::REQUEST_TIMEOUT,
+                ),
+            }
+        },
+    ))
 }
 
 /// Produces the same coarse public status shape as Node. Any SQLite problem becomes an
@@ -3691,6 +3724,31 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn http_requests_past_the_timeout_get_408_and_fast_requests_pass() {
+        let router = axum::Router::new()
+            .route("/fast", axum::routing::get(|| async { "ok" }))
+            .route(
+                "/stuck",
+                axum::routing::get(|| async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    "late"
+                }),
+            );
+        let app = with_request_timeout(router, Duration::from_millis(50));
+        let fast = app
+            .clone()
+            .oneshot(Request::get("/fast").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(fast.status(), axum::http::StatusCode::OK);
+        let stuck = app
+            .oneshot(Request::get("/stuck").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(stuck.status(), axum::http::StatusCode::REQUEST_TIMEOUT);
+    }
 
     #[test]
     fn planned_rejoin_marker_follows_the_database_across_work_directories() {
