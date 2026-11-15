@@ -8,9 +8,11 @@ use serenity::client::Context;
 #[cfg(feature = "voice-driver")]
 use serenity::{
     builder::EditVoiceState,
+    http::{Http, HttpError},
     model::{
         channel::{Channel, ChannelType},
         id::{ChannelId, GuildId},
+        permissions::Permissions,
     },
 };
 #[cfg(feature = "voice-driver")]
@@ -79,7 +81,7 @@ impl SongbirdVoiceSessionTransport {
             .await
             .ok_or(VoiceSessionTransportError::Unavailable)?;
         // Release the call lock before waiting for Discord's handshake events.
-        tokio::time::timeout(Duration::from_secs(10), async {
+        let joined = tokio::time::timeout(Duration::from_secs(10), async {
             let call = manager.get_or_insert(guild_id);
             let join = {
                 let mut handler = call.lock().await;
@@ -96,7 +98,13 @@ impl SongbirdVoiceSessionTransport {
             join.await.map_err(|_| VoiceSessionTransportError::Failed)
         })
         .await
-        .map_err(|_| VoiceSessionTransportError::Failed)??;
+        .unwrap_or(Err(VoiceSessionTransportError::Failed));
+        match joined {
+            Err(VoiceSessionTransportError::Failed) if still_authorized.is_none() => {
+                return Err(join_failure(&self.context.http, guild_id, channel_id).await);
+            }
+            result => result?,
+        }
         // Songbird only decodes incoming Opus when explicitly configured. Keep this opt-in so a
         // normal Rust voice canary does not pay the receive CPU cost or collect audio; the live
         // STT promotion enables it with `RUST_TRANSCRIBE_LIVE_ENABLED=true` and installs its
@@ -118,6 +126,47 @@ impl SongbirdVoiceSessionTransport {
         )
         .await;
         Ok(())
+    }
+}
+
+#[cfg(feature = "voice-driver")]
+async fn join_failure(
+    http: &Http,
+    guild_id: GuildId,
+    channel_id: ChannelId,
+) -> VoiceSessionTransportError {
+    let denied = tokio::time::timeout(Duration::from_secs(3), async {
+        let channel = match http.get_channel(channel_id).await {
+            Ok(Channel::Guild(channel)) if channel.guild_id == guild_id => channel,
+            Err(serenity::Error::Http(HttpError::UnsuccessfulRequest(response)))
+                if response.status_code.as_u16() == 403
+                    && matches!(response.error.code, 50001 | 50013) =>
+            {
+                return true;
+            }
+            _ => return false,
+        };
+        if !matches!(channel.kind, ChannelType::Voice | ChannelType::Stage) {
+            return false;
+        }
+        let member = async {
+            let bot = http.get_current_user().await?;
+            guild_id.member(http, bot.id).await
+        };
+        let (guild, member) = tokio::join!(guild_id.to_partial_guild(http), member);
+        match (guild, member) {
+            (Ok(guild), Ok(member)) => !guild
+                .user_permissions_in(&channel, &member)
+                .contains(Permissions::VIEW_CHANNEL | Permissions::CONNECT),
+            _ => false,
+        }
+    })
+    .await
+    .unwrap_or(false);
+    if denied {
+        VoiceSessionTransportError::PermissionDenied
+    } else {
+        VoiceSessionTransportError::Failed
     }
 }
 
@@ -181,5 +230,69 @@ mod tests {
         assert!(parse_snowflake("123").is_ok());
         assert!(parse_snowflake("0").is_err());
         assert!(parse_snowflake("guild").is_err());
+    }
+
+    #[cfg(feature = "voice-driver")]
+    #[tokio::test]
+    async fn failed_join_reports_permission_denial_only_for_discord_channel_access_errors() {
+        use serenity::http::HttpBuilder;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::TcpListener;
+
+        for (status, code, expected) in [
+            (
+                "403 Forbidden",
+                50001,
+                VoiceSessionTransportError::PermissionDenied,
+            ),
+            (
+                "403 Forbidden",
+                50013,
+                VoiceSessionTransportError::PermissionDenied,
+            ),
+            ("403 Forbidden", 40333, VoiceSessionTransportError::Failed),
+            ("404 Not Found", 10003, VoiceSessionTransportError::Failed),
+            (
+                "503 Service Unavailable",
+                0,
+                VoiceSessionTransportError::Failed,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let http = HttpBuilder::new("synthetic-test-token")
+                .proxy(format!("http://{}", listener.local_addr().unwrap()))
+                .ratelimiter_disabled(true)
+                .build();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                assert!(line.starts_with("GET /api/v10/channels/456 "));
+                loop {
+                    line.clear();
+                    assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let body = format!(r#"{{"code":{code},"message":"QA fixture"}}"#);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                stream
+                    .get_mut()
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap();
+            });
+            let actual = join_failure(&http, GuildId::new(123), ChannelId::new(456)).await;
+            tokio::time::timeout(Duration::from_secs(1), server)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual, expected, "{status} / {code}");
+        }
     }
 }
