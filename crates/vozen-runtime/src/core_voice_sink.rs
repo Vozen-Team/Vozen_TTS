@@ -141,6 +141,7 @@ struct GameRuntime {
 pub struct CoreVoiceGatewaySink {
     store: Arc<Mutex<SqliteStore>>,
     voice_read_store: Arc<Mutex<SqliteStore>>,
+    voice_read_fresh: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     gateway_state: GatewayState,
     options: CoreVoiceRuntimeOptions,
     localizer: Option<VoiceResponseLocalizer>,
@@ -1692,7 +1693,18 @@ impl CoreVoiceGatewaySink {
             rejoin_attempted: AtomicBool::new(false),
             game_runtime,
             runtime_batch,
+            voice_read_fresh: None,
         }
+    }
+
+    /// Voice reads use the authoritative store whenever `fresh` reports the read store as stale.
+    #[must_use]
+    pub fn with_voice_read_freshness(
+        mut self,
+        fresh: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    ) -> Self {
+        self.voice_read_fresh = fresh;
+        self
     }
 
     fn dependencies(
@@ -1840,7 +1852,7 @@ impl CoreVoiceGatewaySink {
             return Ok(service.clone());
         }
         let dependencies = self.dependencies(context)?;
-        let service = Arc::new(
+        let service =
             MessageVoiceService::new_with_synthesis_coordinator_runtime_batch_read_store_and_metrics(
                 self.store.clone(),
                 self.voice_read_store.clone(),
@@ -1851,8 +1863,11 @@ impl CoreVoiceGatewaySink {
                 Arc::new(system_now_ms),
                 self.runtime_batch.clone(),
                 self.gateway_state.metrics(),
-            ),
-        );
+            );
+        let service = Arc::new(match &self.voice_read_fresh {
+            Some(fresh) => service.with_read_store_freshness(fresh.clone()),
+            None => service,
+        });
         *current = Some(service.clone());
         Ok(service)
     }

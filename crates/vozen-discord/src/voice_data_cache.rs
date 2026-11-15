@@ -43,6 +43,8 @@ impl VoiceDataSnapshot {
         self.preparation.guild = guild;
         self.preparation.profile = profile;
         self.preparation.user_voice = store.get_user_voice(guild_id, user_id)?;
+        // Moderation must not lag the replica: a newly blocked word applies to the next message.
+        self.preparation.blocklist = store.get_blocklist(guild_id)?;
         Ok(())
     }
 }
@@ -153,6 +155,22 @@ fn load_snapshot(
 mod tests {
     use super::*;
     use vozen_store::GuildConfigPatch;
+
+    #[test]
+    fn live_refresh_reads_blocklist_from_the_authoritative_store() {
+        let replica = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("replica")));
+        let authority = SqliteStore::open_in_memory().expect("authority");
+        let cache = VoiceDataCache::default();
+        let mut snapshot = cache
+            .snapshot(&replica, "guild", "channel", "user", 1)
+            .expect("replica snapshot");
+        assert!(snapshot.preparation.blocklist.is_empty());
+        authority.add_blockword("guild", "secret").expect("block");
+        snapshot
+            .refresh_live_settings(&authority, "guild", "channel", "user")
+            .expect("refresh");
+        assert_eq!(snapshot.preparation.blocklist, vec!["secret".to_owned()]);
+    }
 
     #[test]
     fn returns_a_cached_snapshot_until_the_ttl_or_explicit_invalidation() {
