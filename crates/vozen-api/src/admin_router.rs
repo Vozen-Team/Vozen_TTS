@@ -36,6 +36,7 @@ pub struct AdminRouterConfig {
     /// Omitted until the server has a read-only Cloudflare token. The route
     /// remains owner-only either way and never returns configuration values.
     pub web_analytics: Option<CloudflareWebAnalyticsConfig>,
+    pub giveaway_guild: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,7 @@ struct AdminState {
     api: Arc<AdminApi>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
     web_analytics: Option<CloudflareWebAnalyticsConfig>,
+    giveaway_guild: Option<String>,
     rate: Arc<Mutex<HashMap<String, RateState>>>,
     login_rate: Arc<Mutex<HashMap<String, RateState>>>,
 }
@@ -72,6 +74,7 @@ pub fn admin_router(config: AdminRouterConfig) -> Result<Router, AdminRouterConf
     Ok(Router::new()
         .route("/api/admin/login", any(admin_request))
         .route("/api/admin/passes", any(admin_request))
+        .route("/api/admin/giveaways", any(admin_request))
         .route("/api/admin/guilds", any(admin_request))
         .route("/api/admin/toptalkers", any(admin_request))
         .route("/api/admin/metrics", any(admin_request))
@@ -85,6 +88,7 @@ pub fn admin_router(config: AdminRouterConfig) -> Result<Router, AdminRouterConf
             api: config.api,
             now: config.now,
             web_analytics: config.web_analytics,
+            giveaway_guild: config.giveaway_guild,
             rate: Arc::new(Mutex::new(HashMap::new())),
             login_rate: Arc::new(Mutex::new(HashMap::new())),
         }))
@@ -146,6 +150,56 @@ async fn admin_request(
     }
     if state.api.authorize(bearer).is_none() {
         return response(StatusCode::FORBIDDEN, json!({"error":"forbidden"}), &state);
+    }
+    if path == "/api/admin/giveaways" {
+        let Some(guild) = &state.giveaway_guild else {
+            return response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"giveaway_disabled"}),
+                &state,
+            );
+        };
+        let result = match method {
+            Method::GET => state
+                .api
+                .giveaways(guild)
+                .map(|campaigns| json!({"campaigns":campaigns})),
+            Method::POST => {
+                let Ok(action) = serde_json::from_slice(&body) else {
+                    return response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error":"invalid_giveaway"}),
+                        &state,
+                    );
+                };
+                match state.api.giveaway_action(guild, action, now) {
+                    Ok(Some(id)) => Ok(json!({"id":id})),
+                    Ok(None) => {
+                        return response(
+                            StatusCode::CONFLICT,
+                            json!({"error":"invalid_giveaway_state"}),
+                            &state,
+                        );
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            _ => {
+                return response(
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    json!({"error":"method_not_allowed"}),
+                    &state,
+                );
+            }
+        };
+        return match result {
+            Ok(value) => response(StatusCode::OK, value, &state),
+            Err(_) => response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error":"internal"}),
+                &state,
+            ),
+        };
     }
     match (path, method) {
         ("/api/admin/passes", Method::GET) => match state.api.list_passes_with_profiles().await {
@@ -517,6 +571,10 @@ mod tests {
     }
 
     fn router() -> Router {
+        router_with_giveaways(None)
+    }
+
+    fn router_with_giveaways(giveaway_guild: Option<String>) -> Router {
         let api = Arc::new(AdminApi::new(AdminApiConfig {
             store: Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store"))),
             resolver: Arc::new(Resolver),
@@ -555,8 +613,79 @@ mod tests {
             api,
             now: Arc::new(|| NOW),
             web_analytics: None,
+            giveaway_guild,
         })
         .expect("router")
+    }
+
+    #[tokio::test]
+    async fn giveaways_are_owner_only_and_round_trip_a_draft() {
+        let app = router_with_giveaways(Some("123456789012345678".into()));
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/giveaways")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/login")
+                    .header("authorization", "Bearer owner-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let login: serde_json::Value =
+            serde_json::from_slice(&to_bytes(login.into_body(), BODY_MAX_BYTES).await.unwrap())
+                .unwrap();
+        let bearer = format!("Bearer {}", login["token"].as_str().unwrap());
+        let draft = json!({
+            "action":"save","request_id":"ea01298f-a728-489a-9639-856befd711cc","channel_id":"234567890123456789",
+            "plan":"premium","seats":3,"days":30,"winner_count":2,"starts_at":0,"ends_at":NOW+3_600_000,
+            "claim_hours":48,"title":"Fixture","description":""
+        });
+        for _ in 0..2 {
+            let saved = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/admin/giveaways")
+                        .header("authorization", &bearer)
+                        .body(Body::from(draft.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(saved.status(), StatusCode::OK);
+        }
+        let listed = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/giveaways")
+                    .header("authorization", bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let listed: serde_json::Value =
+            serde_json::from_slice(&to_bytes(listed.into_body(), BODY_MAX_BYTES).await.unwrap())
+                .unwrap();
+        let campaigns = listed["campaigns"].as_array().unwrap();
+        assert_eq!(campaigns.len(), 1);
+        assert_eq!(campaigns[0]["status"], "draft");
+        assert_eq!(campaigns[0]["guild_id"], "123456789012345678");
     }
 
     #[tokio::test]

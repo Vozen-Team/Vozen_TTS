@@ -730,6 +730,30 @@ impl AdminApi {
             .unwrap_or_default()
     }
 
+    pub(crate) fn giveaways(
+        &self,
+        guild: &str,
+    ) -> Result<Vec<vozen_store::Giveaway>, AdminGrantError> {
+        self.store
+            .lock()
+            .map_err(|_| AdminGrantError::Store)?
+            .giveaways(guild)
+            .map_err(|_| AdminGrantError::Store)
+    }
+
+    pub(crate) fn giveaway_action(
+        &self,
+        guild: &str,
+        action: vozen_store::GiveawayAction,
+        now: i64,
+    ) -> Result<Option<i64>, AdminGrantError> {
+        self.store
+            .lock()
+            .map_err(|_| AdminGrantError::Store)?
+            .giveaway_admin(guild, action, now)
+            .map_err(|_| AdminGrantError::Store)
+    }
+
     pub fn grant(&self, grant: AdminGrant) -> Result<i64, AdminGrantError> {
         let now = (self.now)();
         let (kind, id, days, seats) = match grant {
