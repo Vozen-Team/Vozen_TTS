@@ -36,6 +36,7 @@ mod game_list_sink;
 mod game_score_sink;
 #[cfg(feature = "voice-driver")]
 mod gcloud_adapter;
+mod giveaway_bot;
 #[cfg(feature = "voice-driver")]
 mod gtts_adapter;
 mod guild_lifecycle_sink;
@@ -2857,6 +2858,7 @@ async fn run() -> Result<(), RuntimeError> {
         }
         return gateway.await.map_err(RuntimeError::from);
     };
+    let giveaway_store = config.admin.is_some().then(|| store.clone());
     let app = build_http_router(
         config.database_path.clone(),
         config.premium_http,
@@ -2874,6 +2876,9 @@ async fn run() -> Result<(), RuntimeError> {
     )?;
     let app = with_request_timeout(app, HTTP_REQUEST_TIMEOUT);
     let listener = tokio::net::TcpListener::bind(health_bind).await?;
+    if let Some(store) = giveaway_store {
+        giveaway_bot::spawn(store);
+    }
     if write_rejoin_marker_on_shutdown {
         tokio::select! {
             result = gateway => result.map_err(RuntimeError::from),
@@ -3214,6 +3219,7 @@ fn build_http_router(
                 api: Arc::new(api),
                 now: now.clone(),
                 web_analytics: admin.web_analytics,
+                giveaway_guild: giveaway_bot::config().map(|(_, guild)| guild.to_string()),
             })
         })
         .transpose()?;

@@ -238,6 +238,14 @@ impl SqliteStore {
                 PrivacyPurgeKey::GuildId => unreachable!("guild key in user erase spec"),
             }
         }
+        // Giveaway campaigns are local to SQLite. Remove public result mentions on the next sync.
+        transaction.execute(
+            "UPDATE giveaway SET revision=revision+1 WHERE id IN
+             (SELECT giveaway_id FROM giveaway_award WHERE user_id=?1 AND replaced=0)",
+            [user_id],
+        )?;
+        transaction.execute("DELETE FROM giveaway_award WHERE user_id=?1", [user_id])?;
+        transaction.execute("DELETE FROM giveaway_entry WHERE user_id=?1", [user_id])?;
         if legacy_persona_exists(&transaction)? {
             transaction.execute("DELETE FROM user_persona WHERE user_id = ?1", [user_id])?;
         }

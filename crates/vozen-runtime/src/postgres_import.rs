@@ -42,7 +42,14 @@ pub async fn import_and_reconcile(
     sqlite_path: &Path,
 ) -> Result<Vec<ImportTableReport>, ImportError> {
     let store = SqliteStore::open(sqlite_path)?;
-    let tables = store.durable_table_names()?;
+    let mut tables = store.durable_table_names()?;
+    // Giveaway campaigns and their participant records are local to SQLite.
+    tables.retain(|name| {
+        !matches!(
+            name.as_str(),
+            "giveaway" | "giveaway_entry" | "giveaway_award"
+        )
+    });
     let mut transaction = pool.begin().await.map_err(ImportError::Postgres)?;
     let mut reports = Vec::with_capacity(tables.len());
     let mut fingerprint_input = String::new();

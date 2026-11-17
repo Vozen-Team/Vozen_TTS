@@ -4,6 +4,21 @@
   "objects": [
     {
       "type": "table",
+      "name": "giveaway",
+      "sql": "CREATE TABLE giveaway (\n    id INTEGER PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, guild_id TEXT NOT NULL,\n    channel_id TEXT NOT NULL, message_id TEXT, title TEXT NOT NULL, description TEXT NOT NULL,\n    plan TEXT NOT NULL CHECK(plan IN ('plus','premium')), days INTEGER NOT NULL, seats INTEGER NOT NULL,\n    winner_count INTEGER NOT NULL, starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,\n    claim_hours INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'draft',\n    publish_attempt_at INTEGER, revision INTEGER NOT NULL DEFAULT 0, synced INTEGER NOT NULL DEFAULT 0,\n    error TEXT, cancel_reason TEXT\n)"
+    },
+    {
+      "type": "table",
+      "name": "giveaway_entry",
+      "sql": "CREATE TABLE giveaway_entry (\n    giveaway_id INTEGER NOT NULL REFERENCES giveaway(id), user_id TEXT NOT NULL,\n    PRIMARY KEY (giveaway_id,user_id)\n)"
+    },
+    {
+      "type": "table",
+      "name": "giveaway_award",
+      "sql": "CREATE TABLE giveaway_award (\n    id INTEGER PRIMARY KEY, giveaway_id INTEGER NOT NULL REFERENCES giveaway(id),\n    user_id TEXT NOT NULL, deadline INTEGER NOT NULL, accepted_at INTEGER,\n    expires_at INTEGER, replaced INTEGER NOT NULL DEFAULT 0, replace_requested INTEGER NOT NULL DEFAULT 0,\n    delivery_error INTEGER NOT NULL DEFAULT 0,\n    UNIQUE (giveaway_id,user_id)\n)"
+    },
+    {
+      "type": "table",
       "name": "blocklist",
       "sql": "CREATE TABLE blocklist (\n        guild_id TEXT NOT NULL,\n        word     TEXT NOT NULL,\n        PRIMARY KEY (guild_id, word)\n      )"
     },
