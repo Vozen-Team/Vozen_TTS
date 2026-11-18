@@ -321,6 +321,7 @@ fn set_boolean_fields(source: &serde_json::Map<String, Value>, patch: &mut Guild
     bool_field!("greetOnJoin", greet_on_join);
     bool_field!("translationEnabled", translation_enabled);
     bool_field!("votePromos", vote_promos);
+    bool_field!("stayInCall", stay_in_call);
 }
 
 fn nullable_authorised_id(value: &Value, authorised: &HashSet<String>) -> Option<Option<String>> {
@@ -358,6 +359,28 @@ mod tests {
                 .into_iter()
                 .collect(),
         }
+    }
+
+    #[test]
+    fn stay_in_call_is_an_optional_dashboard_boolean() {
+        for value in [true, false] {
+            let SanitizeDashboardPatch::Valid(patch) = sanitize_dashboard_patch(
+                &json!({"stayInCall": value}),
+                &options(),
+                &GuildConfig::default(),
+            ) else {
+                panic!("valid dashboard toggle");
+            };
+            assert_eq!(patch.stay_in_call, Some(value));
+        }
+        let SanitizeDashboardPatch::Valid(patch) = sanitize_dashboard_patch(
+            &json!({"xsaid": false}),
+            &options(),
+            &GuildConfig::default(),
+        ) else {
+            panic!("valid unrelated edit");
+        };
+        assert_eq!(patch.stay_in_call, None);
     }
 
     #[test]
