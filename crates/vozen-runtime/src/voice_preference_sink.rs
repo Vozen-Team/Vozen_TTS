@@ -1283,7 +1283,7 @@ impl GatewayEventSink for VoicePreferenceGatewaySink {
                         .iter()
                         .map(|model| {
                             format!(
-                                "â€¢ {} â€” `{model}`",
+                                "• {} — `{model}`",
                                 self.displays.voice_name(
                                     Some(&command.locale),
                                     &self.available_models,
