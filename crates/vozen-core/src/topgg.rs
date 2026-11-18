@@ -12,6 +12,12 @@ use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+pub const GIVEAWAY_VOTE_BOTS: [(&str, &str); 3] = [
+    ("TTS", "1523826014935842997"),
+    ("Helper", "1526211106081734666"),
+    ("Music", "1564573935234973817"),
+];
+
 pub const TOPGG_SIGNATURE_TOLERANCE_MS: i64 = 5 * 60 * 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

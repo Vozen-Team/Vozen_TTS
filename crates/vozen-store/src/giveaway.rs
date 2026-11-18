@@ -832,4 +832,62 @@ mod tests {
         .unwrap();
         assert_eq!(db.giveaways("100").unwrap()[0].entries, 4);
     }
+    #[test]
+    fn three_bot_entry_cap_survives_legacy_schema_upgrade() {
+        let (db, id) = setup("plus");
+        db.connection()
+            .execute(
+                "UPDATE giveaway SET status='open',starts_at=?2 WHERE id=?1",
+                params![id, NOW],
+            )
+            .unwrap();
+        db.connection()
+            .execute_batch("ALTER TABLE giveaway_vote DROP COLUMN bot_id")
+            .unwrap();
+        db.connection().execute("INSERT INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at) VALUES (?1,'old-tts','501',?2)",params![id,NOW]).unwrap();
+        crate::migration::migrate_legacy_schema(db.connection()).unwrap();
+        crate::migration::migrate_legacy_schema(db.connection()).unwrap();
+        for (_, bot) in vozen_core::GIVEAWAY_VOTE_BOTS {
+            for event in ["new", "retry"] {
+                db.record_giveaway_vote(bot, &format!("{bot}-{event}"), "501", NOW + 1, NOW + 2)
+                    .unwrap();
+            }
+        }
+        let count: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM giveaway_vote WHERE giveaway_id=?1 AND user_id='501'",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3);
+        let helper = vozen_core::GIVEAWAY_VOTE_BOTS[1].1;
+        assert_eq!(
+            db.record_giveaway_vote(helper, "old", "502", NOW - 1, NOW + 1)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.record_giveaway_vote(helper, "late", "502", NOW + HOUR, NOW + HOUR)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.record_giveaway_vote("unknown", "x", "502", NOW, NOW)
+                .unwrap(),
+            0
+        );
+        db.erase_user_data("501").unwrap();
+        assert_eq!(
+            db.connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM giveaway_vote WHERE user_id='501'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
 }

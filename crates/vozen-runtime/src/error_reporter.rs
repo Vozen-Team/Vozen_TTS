@@ -37,6 +37,8 @@ impl ErrorReporter {
             "ERROR_WEBHOOK_URL",
             "KOFI_WEBHOOK_TOKEN",
             "TOPGG_WEBHOOK_SECRET",
+            "TOPGG_HELPER_WEBHOOK_SECRET",
+            "TOPGG_MUSIC_WEBHOOK_SECRET",
             "VOTE_REDEMPTION_SECRET",
             "ADMIN_SESSION_SECRET",
             "OAUTH_CLIENT_SECRET",

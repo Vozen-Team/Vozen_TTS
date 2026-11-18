@@ -164,11 +164,13 @@ impl SqliteStore {
             }
             crate::growth_lifecycle::add_topgg_vote_daily(&transaction, now)?;
             if let Some(voted_at) = voted_at.filter(|time| *time <= now && *time >= 0) {
-                transaction.execute(
-                    "INSERT OR IGNORE INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at)
-                     SELECT id,?1,?2,?3 FROM giveaway
-                     WHERE status='open' AND starts_at<=?3 AND ends_at>?4 AND ends_at>?3",
-                    params![event_id, user_id, voted_at, now],
+                insert_giveaway_vote(
+                    &transaction,
+                    vozen_core::GIVEAWAY_VOTE_BOTS[0].1,
+                    event_id,
+                    user_id,
+                    voted_at,
+                    now,
                 )?;
             }
         }
@@ -207,6 +209,30 @@ impl SqliteStore {
         Ok(result)
     }
 
+    /// Helper and Music votes enter giveaways without granting the TTS Plus promotion.
+    pub fn record_giveaway_vote(
+        &self,
+        bot_id: &str,
+        event_id: &str,
+        user_id: &str,
+        voted_at: i64,
+        now: i64,
+    ) -> Result<usize, StoreError> {
+        validate_event_id(event_id)?;
+        if !vozen_core::GIVEAWAY_VOTE_BOTS
+            .iter()
+            .any(|(_, id)| *id == bot_id)
+            || user_id.is_empty()
+            || user_id.len() > 25
+            || !user_id.bytes().all(|c| c.is_ascii_digit())
+            || voted_at < 0
+            || voted_at > now
+        {
+            return Ok(0);
+        }
+        insert_giveaway_vote(self.connection(), bot_id, event_id, user_id, voted_at, now)
+    }
+
     /// Removes expired raw-ID entitlements. Pseudonymous vote rows are retained only for the
     /// 30-day rolling eligibility window and are purged with provider delivery IDs.
     pub fn purge_expired_vote_rewards(&self, now: i64) -> Result<usize, StoreError> {
@@ -227,6 +253,24 @@ impl SqliteStore {
         )?;
         Ok(events + ledger)
     }
+}
+
+fn insert_giveaway_vote(
+    connection: &Connection,
+    bot_id: &str,
+    event_id: &str,
+    user_id: &str,
+    voted_at: i64,
+    now: i64,
+) -> Result<usize, StoreError> {
+    Ok(connection.execute(
+        "INSERT OR IGNORE INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at,bot_id)
+         SELECT g.id,?1,?2,?3,?5 FROM giveaway g
+         WHERE g.status='open' AND g.starts_at<=?3 AND g.ends_at>?4 AND g.ends_at>?3
+         AND NOT EXISTS (SELECT 1 FROM giveaway_vote v
+             WHERE v.giveaway_id=g.id AND v.user_id=?2 AND v.bot_id=?5)",
+        params![event_id, user_id, voted_at, now, bot_id],
+    )?)
 }
 
 pub(crate) fn assert_stable_redemption_secret(

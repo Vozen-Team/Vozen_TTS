@@ -99,3 +99,22 @@ Encryption of active data does not encrypt historical plaintext copies,
 provider backups or old disk blocks from a copy-based migration. Retire exact
 historical copies only after independent recovery verification and explicit
 owner authorization. Do not claim complete coverage while those copies remain.
+
+## Giveaway votes for the three Vozen bots
+
+The giveaway card links to TTS, Helper and Music on top.gg. Each project contributes
+at most one entry per person per giveaway. Further votes for that same project do
+not add tickets. Existing historical tickets are retained during the additive
+`giveaway_vote.bot_id` upgrade and default to the preceding TTS source.
+
+The existing TTS webhook remains `/webhook/topgg` with `TOPGG_WEBHOOK_SECRET`.
+Configure the additional provider-generated secrets only when their listings are
+available and the corresponding URLs are saved on top.gg:
+
+- Helper: `https://api.vozen.org/webhook/topgg/helper`, `TOPGG_HELPER_WEBHOOK_SECRET`.
+- Music: `https://api.vozen.org/webhook/topgg/music`, `TOPGG_MUSIC_WEBHOOK_SECRET`.
+
+Each route verifies its own signature and exact Discord application ID. Missing
+secrets leave those routes absent. Helper and Music votes only enter giveaways;
+they do not grant the separate TTS Plus vote promotion. Never activate the new
+three-button card while either listing or its webhook is unavailable.

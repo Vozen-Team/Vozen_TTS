@@ -93,6 +93,11 @@ pub(crate) fn migrate_legacy_schema(connection: &Connection) -> Result<(), Store
         &[("is_subscription", "INTEGER NOT NULL DEFAULT 0")],
     )?;
     add_missing_columns(connection, "topgg_sync_state", TOPGG_SYNC_STATE_COLUMNS)?;
+    add_missing_columns(
+        connection,
+        "giveaway_vote",
+        &[("bot_id", "TEXT NOT NULL DEFAULT '1523826014935842997'")],
+    )?;
 
     // Older releases retained provider delivery IDs for 30 days but did not expose an
     // identity-free vote series. Seed the durable aggregate from those existing rows. MAX makes

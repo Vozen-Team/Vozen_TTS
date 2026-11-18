@@ -94,8 +94,8 @@ pub use text_cleaning::{
     CleanTextOptions, MediaKind, clean_text, collect_markdown_media, collect_url_media,
 };
 pub use topgg::{
-    TOPGG_SIGNATURE_TOLERANCE_MS, TopggVote, TopggWebhookDecision, TopggWebhookRejection,
-    verify_topgg_webhook,
+    GIVEAWAY_VOTE_BOTS, TOPGG_SIGNATURE_TOLERANCE_MS, TopggVote, TopggWebhookDecision,
+    TopggWebhookRejection, verify_topgg_webhook,
 };
 pub use translation_safety::{
     TRANSLATION_INPUT_CAP, TRANSLATION_MARKER, TranslationInput, minimise_translation_text,

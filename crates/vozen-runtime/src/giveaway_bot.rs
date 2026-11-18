@@ -269,7 +269,7 @@ fn button(g: i64, action: &str, label: &str, style: ButtonStyle) -> CreateButton
         .style(style)
 }
 
-const VOTE_URL: &str = "https://top.gg/bot/1523826014935842997/vote";
+const VOTE_RULE: &str = "Up to 3 entries: one vote per bot";
 
 fn prize(g: &Giveaway) -> String {
     let plan = if g.plan == "plus" {
@@ -305,12 +305,18 @@ fn announcement(g: &Giveaway, opening: bool) -> (CreateEmbed, Vec<CreateActionRo
                 g.winner_count,
                 g.ends_at / 1000
             ))
-            .footer(CreateEmbedFooter::new("Each confirmed vote adds one entry"));
+            .footer(CreateEmbedFooter::new(VOTE_RULE));
         return (
             embed,
-            vec![CreateActionRow::Buttons(vec![
-                CreateButton::new_link(VOTE_URL).label("Vote for Vozen"),
-            ])],
+            vec![CreateActionRow::Buttons(
+                vozen_core::GIVEAWAY_VOTE_BOTS
+                    .iter()
+                    .map(|(name, id)| {
+                        CreateButton::new_link(format!("https://top.gg/bot/{id}/vote"))
+                            .label(format!("Vote for {name}"))
+                    })
+                    .collect(),
+            )],
         );
     }
     if g.status == "cancelled" {
@@ -417,7 +423,7 @@ impl EventHandler for GiveawayBot {
                         )
                     });
                     match result {
-                        Ok(GiveawayClick::VoteRequired) => format!("Vote for Vozen to enter: {VOTE_URL}. Each confirmed vote during the giveaway adds one entry."),
+                        Ok(GiveawayClick::VoteRequired) => "Vote using the TTS, Helper or Music buttons on the giveaway message. Each bot gives one entry, up to 3 entries per person for this giveaway.".into(),
                         Ok(GiveawayClick::Left) => "Your entries have been removed.".to_owned(),
                         Ok(GiveawayClick::Closed) => "This giveaway is closed.".to_owned(),
                         Ok(GiveawayClick::NotWinner) => "This prize belongs to another participant.".to_owned(),
@@ -456,11 +462,19 @@ mod tests {
         let (embed, buttons) = announcement(&g, true);
         let card = serde_json::to_value(embed).unwrap();
         assert_eq!(card["title"], "🎉 Giveaway for Vozen Plus (1 Month)");
-        assert_eq!(card["footer"]["text"], "Each confirmed vote adds one entry");
-        assert_eq!(
-            serde_json::to_value(buttons).unwrap()[0]["components"][0]["url"],
-            VOTE_URL
-        );
+        assert_eq!(card["footer"]["text"], VOTE_RULE);
+        let buttons = serde_json::to_value(buttons).unwrap();
+        assert_eq!(buttons[0]["components"].as_array().unwrap().len(), 3);
+        for (index, (name, id)) in vozen_core::GIVEAWAY_VOTE_BOTS.iter().enumerate() {
+            assert_eq!(
+                buttons[0]["components"][index]["url"],
+                format!("https://top.gg/bot/{id}/vote")
+            );
+            assert_eq!(
+                buttons[0]["components"][index]["label"],
+                format!("Vote for {name}")
+            );
+        }
         g.status = "closed".into();
         g.awards.push(GiveawayAward {
             id: 1,
