@@ -581,7 +581,7 @@ fn unavailable(id: &str) -> DashboardOption {
 }
 
 fn config_body(config: &GuildConfig) -> Value {
-    json!({"autoread":config.autoread,"xsaid":config.xsaid,"autojoin":config.autojoin,"readBots":config.read_bots,"textInVoice":config.text_in_voice,"antispam":config.antispam,"streakAnnounce":config.streak_announce,"soundboard":config.soundboard,"greetOnJoin":config.greet_on_join,"translationEnabled":config.translation_enabled,"votePromos":config.vote_promos,"maxChars":config.max_chars,"ratePerMin":config.rate_per_min,"locale":config.locale,"ttsChannelId":config.tts_channel_id,"defaultVoice":config.default_voice,"priorityRoleId":config.priority_role_id,"blockedRoleId":config.blocked_role_id})
+    json!({"autoread":config.autoread,"xsaid":config.xsaid,"autojoin":config.autojoin,"readBots":config.read_bots,"textInVoice":config.text_in_voice,"antispam":config.antispam,"streakAnnounce":config.streak_announce,"soundboard":config.soundboard,"greetOnJoin":config.greet_on_join,"translationEnabled":config.translation_enabled,"votePromos":config.vote_promos,"stayInCall":config.stay_in_call,"maxChars":config.max_chars,"ratePerMin":config.rate_per_min,"locale":config.locale,"ttsChannelId":config.tts_channel_id,"defaultVoice":config.default_voice,"priorityRoleId":config.priority_role_id,"blockedRoleId":config.blocked_role_id})
 }
 
 fn profile_body(profile: ChannelProfile) -> Value {
@@ -1046,6 +1046,40 @@ mod tests {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
         builder.body(Body::from(body.to_owned())).expect("request")
+    }
+
+    #[tokio::test]
+    async fn stay_in_call_survives_dashboard_save_reload_and_unrelated_edits() {
+        let app = app();
+        let uri = format!("/api/dashboard/guild/{GUILD}");
+        for (body, expected) in [
+            (r#"{"stayInCall":true}"#, true),
+            (r#"{"xsaid":false}"#, true),
+            (r#"{"stayInCall":false}"#, false),
+        ] {
+            let saved = app
+                .clone()
+                .oneshot(request(Method::POST, &uri, Some("good"), body))
+                .await
+                .expect("save response");
+            assert_eq!(saved.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(saved.into_body(), usize::MAX)
+                .await
+                .expect("save body");
+            let saved: Value = serde_json::from_slice(&bytes).expect("save JSON");
+            assert_eq!(saved["config"]["stayInCall"], expected);
+            let reloaded = app
+                .clone()
+                .oneshot(request(Method::GET, &uri, Some("good"), ""))
+                .await
+                .expect("reload response");
+            assert_eq!(reloaded.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(reloaded.into_body(), usize::MAX)
+                .await
+                .expect("reload body");
+            let reloaded: Value = serde_json::from_slice(&bytes).expect("reload JSON");
+            assert_eq!(reloaded["config"]["stayInCall"], expected);
+        }
     }
 
     #[tokio::test]
