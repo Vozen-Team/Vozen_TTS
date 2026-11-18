@@ -230,6 +230,7 @@ struct PremiumHttpConfig {
 }
 
 struct TopggWebhookRuntimeConfig {
+    giveaway_webhook_secrets: [Option<String>; 2],
     client_id: String,
     webhook_secret: String,
     redemption_secret: String,
@@ -2130,6 +2131,10 @@ fn topgg_webhook_from_environment() -> Result<Option<TopggWebhookRuntimeConfig>,
     let redemption_secret =
         nonempty_env("VOTE_REDEMPTION_SECRET").ok_or(RuntimeError::MissingVoteRedemptionSecret)?;
     Ok(Some(TopggWebhookRuntimeConfig {
+        giveaway_webhook_secrets: [
+            nonempty_env("TOPGG_HELPER_WEBHOOK_SECRET"),
+            nonempty_env("TOPGG_MUSIC_WEBHOOK_SECRET"),
+        ],
         client_id,
         webhook_secret,
         redemption_secret,
@@ -3075,6 +3080,7 @@ fn build_http_router(
             kofi_webhook: None,
             topgg_webhook: topgg_webhook.map(|config| TopggWebhookConfig {
                 webhook_secret: config.webhook_secret,
+                giveaway_webhook_secrets: config.giveaway_webhook_secrets,
                 redemption_secret: config.redemption_secret,
                 expected_bot_id: config.client_id,
                 store,
@@ -3314,6 +3320,7 @@ fn build_http_router(
         kofi_webhook,
         topgg_webhook: topgg_webhook.map(|config| TopggWebhookConfig {
             webhook_secret: config.webhook_secret,
+            giveaway_webhook_secrets: config.giveaway_webhook_secrets,
             redemption_secret: config.redemption_secret,
             expected_bot_id: config.client_id,
             store: store.clone(),

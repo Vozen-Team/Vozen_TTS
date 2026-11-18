@@ -20,7 +20,7 @@
     {
       "type": "table",
       "name": "giveaway_vote",
-      "sql": "CREATE TABLE giveaway_vote (giveaway_id INTEGER NOT NULL REFERENCES giveaway(id), event_id TEXT NOT NULL, user_id TEXT NOT NULL, voted_at INTEGER NOT NULL, PRIMARY KEY (giveaway_id,event_id))"
+      "sql": "CREATE TABLE giveaway_vote (giveaway_id INTEGER NOT NULL REFERENCES giveaway(id), event_id TEXT NOT NULL, user_id TEXT NOT NULL, voted_at INTEGER NOT NULL, bot_id TEXT NOT NULL DEFAULT '1523826014935842997', PRIMARY KEY (giveaway_id,event_id))"
     },
     {
       "type": "table",

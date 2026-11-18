@@ -25,6 +25,7 @@ pub struct TopggWebhookConfig {
     pub webhook_secret: String,
     pub redemption_secret: String,
     pub expected_bot_id: String,
+    pub giveaway_webhook_secrets: [Option<String>; 2],
     pub store: Arc<Mutex<SqliteStore>>,
     /// Optional process-local observability. The route remains usable by API-only callers that
     /// do not expose `/stats`; when present, only authenticated, non-duplicate upvotes count.
@@ -37,6 +38,7 @@ struct TopggWebhookState {
     webhook_secret: Arc<str>,
     redemption_secret: Arc<str>,
     expected_bot_id: Arc<str>,
+    giveaway_only: bool,
     store: Arc<Mutex<SqliteStore>>,
     metrics: Option<Arc<RuntimeMetrics>>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -79,19 +81,40 @@ pub fn topgg_webhook_router(config: TopggWebhookConfig) -> Result<Router, TopggW
     if !is_discord_application_id(&config.expected_bot_id) {
         return Err(TopggWebhookConfigError::ExpectedBotId);
     }
-    Ok(Router::new()
+    let state = TopggWebhookState {
+        webhook_secret: Arc::from(config.webhook_secret),
+        redemption_secret: Arc::from(config.redemption_secret),
+        expected_bot_id: Arc::from(config.expected_bot_id),
+        giveaway_only: false,
+        store: config.store,
+        metrics: config.metrics,
+        now: config.now,
+    };
+    let mut router = Router::new()
         .route("/webhook/topgg", any(topgg_webhook))
-        // Match the Node webhook's incremental 64 KB cap before an attacker can force a
-        // larger `Bytes` allocation. The handler retains the explicit contract check.
-        .layer(DefaultBodyLimit::max(BODY_MAX_BYTES))
-        .with_state(TopggWebhookState {
-            webhook_secret: Arc::from(config.webhook_secret),
-            redemption_secret: Arc::from(config.redemption_secret),
-            expected_bot_id: Arc::from(config.expected_bot_id),
-            store: config.store,
-            metrics: config.metrics,
-            now: config.now,
-        }))
+        .with_state(state.clone());
+    for ((path, bot_id), secret) in [
+        ("/webhook/topgg/helper", vozen_core::GIVEAWAY_VOTE_BOTS[1].1),
+        ("/webhook/topgg/music", vozen_core::GIVEAWAY_VOTE_BOTS[2].1),
+    ]
+    .into_iter()
+    .zip(config.giveaway_webhook_secrets)
+    {
+        if let Some(secret) = secret {
+            if secret.trim().is_empty() {
+                return Err(TopggWebhookConfigError::WebhookSecret);
+            }
+            router = router.merge(Router::new().route(path, any(topgg_webhook)).with_state(
+                TopggWebhookState {
+                    webhook_secret: Arc::from(secret),
+                    expected_bot_id: Arc::from(bot_id),
+                    giveaway_only: true,
+                    ..state.clone()
+                },
+            ));
+        }
+    }
+    Ok(router.layer(DefaultBodyLimit::max(BODY_MAX_BYTES)))
 }
 
 async fn topgg_webhook(
@@ -125,22 +148,35 @@ async fn topgg_webhook(
     ) {
         TopggWebhookDecision::Acknowledged => status(StatusCode::OK, "ok"),
         TopggWebhookDecision::Rejected(rejection) => rejected(rejection),
+        TopggWebhookDecision::Upvote(vote) if state.giveaway_only => {
+            let Some((event_id, voted_at)) = vote
+                .event_id
+                .as_deref()
+                .zip(parse_vote_time(vote.voted_at.as_deref()))
+            else {
+                return status(StatusCode::OK, "ok");
+            };
+            match state.store.lock() {
+                Ok(store) => match store.record_giveaway_vote(
+                    &state.expected_bot_id,
+                    event_id,
+                    &vote.user_id,
+                    voted_at,
+                    (state.now)(),
+                ) {
+                    Ok(_) => status(StatusCode::OK, "ok"),
+                    Err(_) => status(StatusCode::INTERNAL_SERVER_ERROR, "entry_failed"),
+                },
+                Err(_) => status(StatusCode::INTERNAL_SERVER_ERROR, "entry_failed"),
+            }
+        }
         TopggWebhookDecision::Upvote(vote) => match state.store.lock() {
             Ok(store) => match store.claim_topgg_vote_reward_at(
                 vote.event_id.as_deref(),
                 &vote.user_id,
                 (state.now)(),
                 &state.redemption_secret,
-                vote.voted_at
-                    .as_deref()
-                    .and_then(|value| {
-                        time::OffsetDateTime::parse(
-                            value,
-                            &time::format_description::well_known::Rfc3339,
-                        )
-                        .ok()
-                    })
-                    .and_then(|value| i64::try_from(value.unix_timestamp_nanos() / 1_000_000).ok()),
+                parse_vote_time(vote.voted_at.as_deref()),
             ) {
                 Ok(TopggVoteRewardResult::DuplicateEvent) => status(StatusCode::OK, "duplicate"),
                 Ok(TopggVoteRewardResult::Granted { .. } | TopggVoteRewardResult::RateLimited) => {
@@ -154,6 +190,14 @@ async fn topgg_webhook(
             Err(_) => status(StatusCode::INTERNAL_SERVER_ERROR, "reward_failed"),
         },
     }
+}
+
+fn parse_vote_time(value: Option<&str>) -> Option<i64> {
+    value
+        .and_then(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+        })
+        .and_then(|value| i64::try_from(value.unix_timestamp_nanos() / 1_000_000).ok())
 }
 
 fn rejected(rejection: TopggWebhookRejection) -> Response {
@@ -197,6 +241,7 @@ mod tests {
             webhook_secret: SECRET.into(),
             redemption_secret: REDEMPTION_SECRET.into(),
             expected_bot_id: BOT.into(),
+            giveaway_webhook_secrets: [None, None],
             store,
             metrics,
             now: Arc::new(|| NOW),
@@ -305,6 +350,7 @@ mod tests {
             webhook_secret: String::new(),
             redemption_secret: REDEMPTION_SECRET.into(),
             expected_bot_id: BOT.into(),
+            giveaway_webhook_secrets: [None, None],
             store: store.clone(),
             metrics: None,
             now: Arc::new(|| NOW),
@@ -377,6 +423,7 @@ mod tests {
                 webhook_secret: SECRET.into(),
                 redemption_secret: REDEMPTION_SECRET.into(),
                 expected_bot_id: BOT.into(),
+                giveaway_webhook_secrets: [None, None],
                 store: store.clone(),
                 metrics: None,
                 now: Arc::new(move || now),
@@ -408,7 +455,131 @@ mod tests {
             );
         }
         let guard = store.lock().unwrap();
-        assert_eq!(guard.giveaways("100").unwrap()[0].entries, 6);
-        assert_eq!(guard.giveaway_candidates(id).unwrap().len(), 6);
+        assert_eq!(guard.giveaways("100").unwrap()[0].entries, 1);
+        assert_eq!(guard.giveaway_candidates(id).unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn three_project_votes_are_authenticated_capped_and_do_not_share_plus_rewards() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap()));
+        {
+            let guard = store.lock().unwrap();
+            let save = serde_json::from_value(json!({
+                "action":"save","request_id":"ea01298f-a728-489a-9639-856befd711cd","channel_id":"200",
+                "title":"Three votes","description":"","plan":"plus","days":30,"seats":0,
+                "winner_count":1,"starts_at":NOW-1000,"ends_at":NOW+3600000,"claim_hours":48
+            }))
+            .unwrap();
+            let id = guard
+                .giveaway_admin("100", save, NOW - 1000)
+                .unwrap()
+                .unwrap();
+            guard
+                .giveaway_admin(
+                    "100",
+                    vozen_store::GiveawayAction::Schedule { id },
+                    NOW - 1000,
+                )
+                .unwrap();
+            guard.giveaway_published(id, "300").unwrap();
+        }
+        let helper_secret = "whs_helper_project_secret";
+        let music_secret = "whs_music_project_secret";
+        let app = topgg_webhook_router(TopggWebhookConfig {
+            expected_bot_id: vozen_core::GIVEAWAY_VOTE_BOTS[0].1.into(),
+            webhook_secret: SECRET.into(),
+            redemption_secret: REDEMPTION_SECRET.into(),
+            giveaway_webhook_secrets: [Some(helper_secret.into()), Some(music_secret.into())],
+            store: store.clone(),
+            metrics: None,
+            now: Arc::new(|| NOW),
+        })
+        .unwrap();
+        let signed = |path: &str, bot: &str, event: &str, secret: &str| {
+            let at = time::OffsetDateTime::from_unix_timestamp(NOW / 1000)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let body = json!({"type":"vote.create","data":{"id":event,"created_at":at,
+                "user":{"platform_id":USER},"project":{"platform_id":bot}}})
+            .to_string();
+            let timestamp = (NOW / 1000).to_string();
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+            mac.update(format!("{timestamp}.{body}").as_bytes());
+            let signature = mac
+                .finalize()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("x-topgg-signature", format!("t={timestamp},v1={signature}"))
+                .body(Body::from(body))
+                .unwrap()
+        };
+        for (index, path, secret) in [
+            (1, "/webhook/topgg/helper", helper_secret),
+            (2, "/webhook/topgg/music", music_secret),
+        ] {
+            let bot = vozen_core::GIVEAWAY_VOTE_BOTS[index].1;
+            for event in ["first", "first", "later"] {
+                let req = signed(path, bot, &format!("{index}-{event}"), secret);
+                assert_eq!(
+                    app.clone().oneshot(req).await.unwrap().status(),
+                    StatusCode::OK
+                );
+            }
+            assert!(
+                store
+                    .lock()
+                    .unwrap()
+                    .vote_reward_at(USER)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let tts = vozen_core::GIVEAWAY_VOTE_BOTS[0].1;
+        for event in ["tts-first", "tts-first"] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(signed("/webhook/topgg", tts, event, SECRET))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        let helper = vozen_core::GIVEAWAY_VOTE_BOTS[1].1;
+        assert_eq!(
+            app.clone()
+                .oneshot(signed(
+                    "/webhook/topgg/helper",
+                    helper,
+                    "bad-secret",
+                    music_secret
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.oneshot(signed(
+                "/webhook/topgg/helper",
+                tts,
+                "wrong-project",
+                helper_secret
+            ))
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let guard = store.lock().unwrap();
+        assert_eq!(guard.giveaways("100").unwrap()[0].entries, 3);
+        assert!(guard.vote_reward_at(USER).unwrap().is_some());
     }
 }
