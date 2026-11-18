@@ -489,4 +489,98 @@ mod tests {
             "Claim prize"
         );
     }
+    #[tokio::test]
+    async fn winner_dm_persists_the_message_and_enables_public_claim_when_discord_blocks_delivery()
+    {
+        use axum::{Json, Router, http::StatusCode, routing::post};
+        use serenity::http::HttpBuilder;
+        let now = 1_800_000_000_000;
+        let user = "12345678901234567";
+        for blocked in [false, true] {
+            let store = SqliteStore::open_in_memory().unwrap();
+            let action = serde_json::from_value(serde_json::json!({
+                "action":"save","request_id":"ea01298f-a728-489a-9639-856befd711cc",
+                "channel_id":"200","title":"","description":"","plan":"plus","days":30,"seats":0,
+                "winner_count":1,"starts_at":now,"ends_at":now+1000,"claim_hours":48
+            }))
+            .unwrap();
+            let id = store.giveaway_admin("100", action, now).unwrap().unwrap();
+            store
+                .giveaway_admin("100", vozen_store::GiveawayAction::Schedule { id }, now)
+                .unwrap();
+            store.giveaway_published(id, "300").unwrap();
+            store
+                .claim_topgg_vote_reward_at(
+                    Some("vote"),
+                    user,
+                    now + 1,
+                    "0123456789abcdef0123456789abcdef",
+                    Some(now),
+                )
+                .unwrap();
+            store
+                .giveaway_draw(id, None, &[user.into()], now + 1000)
+                .unwrap();
+            let g = store.giveaways("100").unwrap().remove(0);
+            let mut dm = serenity::all::PrivateChannel::default();
+            dm.id = ChannelId::new(400);
+            dm.kind = ChannelType::Private;
+            dm.recipient.id = UserId::new(user.parse().unwrap());
+            let dm_json = serde_json::to_value(dm).unwrap();
+            let recorded = Arc::new(Mutex::new(None));
+            let receiver = recorded.clone();
+            let server=Router::new()
+                .route("/api/v10/users/@me/channels",post(move || {
+                    let data=dm_json.clone();
+                    async move { Json(data) }
+                }))
+                .route("/api/v10/channels/400/messages",post(move |Json(payload):Json<serde_json::Value>| {
+                    *receiver.lock().unwrap()=Some(payload);
+                    async move {
+                        if blocked {
+                            (StatusCode::FORBIDDEN,Json(serde_json::json!({"code":50007,"message":"Cannot send messages to this user"})))
+                        } else {
+                            let mut message=serenity::all::Message::default();
+                            message.id=MessageId::new(500);message.channel_id=ChannelId::new(400);
+                            (StatusCode::OK,Json(serde_json::to_value(message).unwrap()))
+                        }
+                    }
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(listener, server).await.unwrap();
+            });
+            let http = HttpBuilder::new("synthetic-token")
+                .proxy(format!("http://{address}"))
+                .ratelimiter_disabled(true)
+                .build();
+            let bot = GiveawayBot {
+                store: Arc::new(Mutex::new(store)),
+                guild: GuildId::new(100),
+            };
+            bot.notify(&http, &g, &g.awards[0]).await.unwrap();
+            let payload = recorded.lock().unwrap().clone().unwrap();
+            assert_eq!(
+                payload["embeds"][0]["title"],
+                "🎉 You won a Vozen giveaway!"
+            );
+            assert_eq!(
+                payload["components"][0]["components"][0]["custom_id"],
+                format!("giveaway:{id}:claim")
+            );
+            let state = bot.db(|db| db.giveaways("100")).unwrap();
+            assert_eq!(state[0].awards[0].dm_blocked, blocked);
+            if blocked {
+                assert!(state[0].awards[0].dm_message.is_none());
+            } else {
+                assert_eq!(
+                    bot.db(|db| db.giveaway_dm_original(id, user, "500"))
+                        .unwrap(),
+                    Some("300".into())
+                );
+            }
+            task.abort();
+        }
+    }
 }
