@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -7,12 +8,13 @@ use serenity::{
     Client,
     all::{
         ButtonStyle, Channel, ChannelId, ChannelType, Context, CreateActionRow,
-        CreateAllowedMentions, CreateButton, CreateInteractionResponse,
-        CreateInteractionResponseMessage, CreateMessage, EditMessage, EventHandler, GatewayIntents,
-        GuildId, Http, Interaction, MessageId, Nonce, UserId,
+        CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedFooter,
+        CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
+        EditInteractionResponse, EditMessage, EventHandler, GatewayIntents, GuildId, Http,
+        Interaction, MessageId, Nonce, UserId,
     },
 };
-use vozen_store::{Giveaway, GiveawayClick, SqliteStore};
+use vozen_store::{Giveaway, GiveawayAward, GiveawayClick, SqliteStore};
 
 use crate::system_now_ms;
 
@@ -100,39 +102,38 @@ impl GiveawayBot {
         let channel = ChannelId::new(g.channel_id.parse()?);
         if g.status == "scheduled" {
             if g.ends_at <= now {
-                return self
-                    .db(|db| db.giveaway_error(g.id, "O prazo terminou antes da publicação."));
+                return self.db(|db| {
+                    db.giveaway_error(g.id, "The giveaway ended before it could be published.")
+                });
             }
             let verified = match channel.to_channel(http).await {
                 Ok(channel) => channel,
                 Err(error) if discord_permission_error(&error) => {
-                    return self.db(|db| {
-                        db.giveaway_error(g.id, "O bot não tem acesso ao canal indicado.")
-                    });
+                    return self
+                        .db(|db| db.giveaway_error(g.id, "The bot cannot access this channel."));
                 }
                 Err(error) => return Err(error.into()),
             };
             if !matches!(verified, Channel::Guild(ref c) if c.guild_id == self.guild
                 && matches!(c.kind, ChannelType::Text | ChannelType::News))
             {
-                return self.db(|db| {
-                    db.giveaway_error(g.id, "Escolhe um canal de texto do servidor de suporte.")
-                });
+                return self
+                    .db(|db| db.giveaway_error(g.id, "Choose a text channel in Vozen Support."));
             }
             if !self.db(|db| db.giveaway_publish_attempt(g.id, now))? {
                 return self.db(|db| {
                     db.giveaway_error(
                         g.id,
-                        "Publicação por confirmar. Verifica o canal antes de cancelar.",
+                        "Publication could not be confirmed. Check the channel before cancelling.",
                     )
                 });
             }
-            let (content, components) = announcement(g, true);
+            let (embed, components) = announcement(g, true);
             let message = channel
                 .send_message(
                     http,
                     CreateMessage::new()
-                        .content(content)
+                        .embed(embed)
                         .components(components)
                         .allowed_mentions(CreateAllowedMentions::new())
                         .nonce(Nonce::String(g.id.to_string()))
@@ -145,7 +146,7 @@ impl GiveawayBot {
                     return self.db(|db| {
                         db.giveaway_error(
                             g.id,
-                            "O bot não conseguiu publicar neste canal. Verifica as permissões.",
+                            "The bot could not post in this channel. Check its permissions.",
                         )
                     });
                 }
@@ -161,6 +162,16 @@ impl GiveawayBot {
             let winners = self.eligible(http, g.id, 1).await?;
             return self.db(|db| db.giveaway_draw(g.id, Some(award.id), &winners, system_now_ms()));
         }
+        for award in g.awards.iter().filter(|a| {
+            !a.replaced
+                && a.accepted_at.is_none()
+                && a.deadline > now
+                && a.dm_message.is_none()
+                && !a.dm_blocked
+                && a.dm_attempt.is_none_or(|attempt| attempt <= now - 60_000)
+        }) {
+            self.notify(http, g, award).await?;
+        }
         for award in g
             .awards
             .iter()
@@ -171,13 +182,14 @@ impl GiveawayBot {
         if let Some(msg) = &g.message_id
             && g.synced < g.revision
         {
-            let (content, components) = announcement(g, false);
+            let (embed, components) = announcement(g, false);
             channel
                 .edit_message(
                     http,
                     MessageId::new(msg.parse()?),
                     EditMessage::new()
-                        .content(content)
+                        .content("")
+                        .embeds(vec![embed])
                         .components(components)
                         .allowed_mentions(CreateAllowedMentions::new()),
                 )
@@ -187,9 +199,46 @@ impl GiveawayBot {
         Ok(())
     }
 
+    async fn notify(
+        &self,
+        http: &Http,
+        g: &Giveaway,
+        award: &GiveawayAward,
+    ) -> Result<(), BotError> {
+        self.db(|db| db.giveaway_dm_attempt(award.id, system_now_ms()))?;
+        let user = UserId::new(award.user_id.parse()?);
+        let result = async {
+            let channel=user.create_dm_channel(http).await?;
+            channel.send_message(http,CreateMessage::new()
+                .embed(CreateEmbed::new().colour(0xA4A4FF).title("🎉 You won a Vozen giveaway!")
+                    .description(format!("Your prize: **{}**.\n\nClaim it before <t:{}:F> (<t:{}:R>).\nUse the button below to activate your prize.",
+                        prize(g),award.deadline/1000,award.deadline/1000)))
+                .components(vec![CreateActionRow::Buttons(vec![button(g.id,"claim","Activate prize",ButtonStyle::Success)])])
+                .allowed_mentions(CreateAllowedMentions::new())
+                .nonce(Nonce::String(format!("award:{}",award.id))).enforce_nonce(true)).await
+        }.await;
+        match result {
+            Ok(message) => self.db(|db| {
+                db.giveaway_dm_sent(
+                    award.id,
+                    &message.channel_id.to_string(),
+                    &message.id.to_string(),
+                )
+            }),
+            Err(error) if discord_permission_error(&error) => {
+                self.db(|db| db.giveaway_dm_blocked(g.id, award.id))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn eligible(&self, http: &Http, id: i64, count: usize) -> Result<Vec<String>, BotError> {
         let mut winners = Vec::new();
+        let mut seen = HashSet::new();
         for candidate in self.db(|db| db.giveaway_candidates(id))? {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
             match self
                 .guild
                 .member(http, UserId::new(candidate.parse()?))
@@ -220,67 +269,93 @@ fn button(g: i64, action: &str, label: &str, style: ButtonStyle) -> CreateButton
         .style(style)
 }
 
-fn announcement(g: &Giveaway, opening: bool) -> (String, Vec<CreateActionRow>) {
+const VOTE_URL: &str = "https://top.gg/bot/1523826014935842997/vote";
+
+fn prize(g: &Giveaway) -> String {
     let plan = if g.plan == "plus" {
-        "Plus pessoal".to_string()
+        "Plus".to_owned()
     } else {
-        format!("Premium para {} servidores", g.seats)
+        format!("Premium · {} servers", g.seats)
     };
-    let title = if g.title.is_empty() {
-        "Giveaway Vozen"
+    let duration = if g.days == 30 {
+        "1 Month".to_owned()
+    } else if g.days == 365 {
+        "1 Year".to_owned()
     } else {
-        &g.title
+        format!("{} Days", g.days)
     };
-    let mut content = format!(
-        "🎉 **{title}**\nPrémio por vencedor: **{} dias de Vozen {plan}**.\nVencedores: **{}** · Prazo de ativação: **{} h**.\nInscrições até <t:{}:F>.",
-        g.days,
-        g.winner_count,
-        g.claim_hours,
-        g.ends_at / 1000
-    );
+    format!("Vozen {plan} ({duration})")
+}
+
+fn announcement(g: &Giveaway, opening: bool) -> (CreateEmbed, Vec<CreateActionRow>) {
+    let mut embed = CreateEmbed::new().colour(0xA4A4FF);
     if !g.description.is_empty() {
-        content.push('\n');
-        content.push_str(&g.description);
+        embed = embed.field("Details", &g.description, false);
     }
-    let buttons = if opening {
-        vec![
-            button(g.id, "join", "Participar", ButtonStyle::Primary),
-            button(
-                g.id,
-                "leave",
-                "Retirar participação",
-                ButtonStyle::Secondary,
-            ),
-        ]
-    } else if g.status == "cancelled" {
-        content.push_str(&format!(
-            "\n\n**Cancelado.** {}",
-            g.cancel_reason.as_deref().unwrap_or("")
-        ));
-        Vec::new()
-    } else {
-        let active: Vec<_> = g.awards.iter().filter(|award| !award.replaced).collect();
-        if active.is_empty() {
-            content.push_str("\n\n**Encerrado sem participantes elegíveis.**");
-            Vec::new()
+    if opening || g.status == "open" {
+        let plural = if g.winner_count == 1 {
+            "Winner"
         } else {
-            content.push_str("\n\n**Vencedores**");
-            for award in active {
-                content.push_str(&format!(
-                    "\n<@{}> · ativar até <t:{}:f>",
-                    award.user_id,
-                    award.deadline / 1000
-                ));
-            }
-            vec![button(g.id, "claim", "Ativar prémio", ButtonStyle::Success)]
-        }
-    };
-    let components = if buttons.is_empty() {
-        Vec::new()
+            "Winners"
+        };
+        embed = embed
+            .title(format!("🎉 Giveaway for {}", prize(g)))
+            .description(format!(
+                "{} {plural}\n\nEnds: <t:{}:R>",
+                g.winner_count,
+                g.ends_at / 1000
+            ))
+            .footer(CreateEmbedFooter::new("Each confirmed vote adds one entry"));
+        return (
+            embed,
+            vec![CreateActionRow::Buttons(vec![
+                CreateButton::new_link(VOTE_URL).label("Vote for Vozen"),
+            ])],
+        );
+    }
+    if g.status == "cancelled" {
+        return (
+            embed
+                .title(format!("Giveaway cancelled · {}", prize(g)))
+                .description("This giveaway has been cancelled."),
+            Vec::new(),
+        );
+    }
+    let winners: Vec<_> = g.awards.iter().filter(|a| !a.replaced).collect();
+    let mut body = format!("Ended: <t:{}:R>\n", g.ends_at / 1000);
+    if winners.is_empty() {
+        body.push_str("\nNo eligible entries were received.");
     } else {
-        vec![CreateActionRow::Buttons(buttons)]
+        for (index, award) in winners.iter().enumerate() {
+            body.push_str(&format!(
+                "\nWinner #{}: <@{}> ({} entries)",
+                index + 1,
+                award.user_id,
+                award.entries
+            ));
+        }
+        body.push_str("\n\nCheck your DM from Vozen Giveaways to activate your prize.");
+    }
+    let blocked = winners.iter().any(|a| a.dm_blocked);
+    if blocked {
+        body.push_str("\nIf your DMs are closed, use the claim button below.");
+    }
+    let components = if blocked {
+        vec![CreateActionRow::Buttons(vec![button(
+            g.id,
+            "claim",
+            "Claim prize",
+            ButtonStyle::Success,
+        )])]
+    } else {
+        Vec::new()
     };
-    (content, components)
+    (
+        embed
+            .title(format!("🎉 Giveaway ended · {}", prize(g)))
+            .description(body),
+        components,
+    )
 }
 
 #[serenity::async_trait]
@@ -289,7 +364,7 @@ impl EventHandler for GiveawayBot {
         let Interaction::Component(click) = interaction else {
             return;
         };
-        if click.guild_id != Some(self.guild) || click.user.bot {
+        if click.user.bot || click.guild_id.is_some_and(|guild| guild != self.guild) {
             return;
         }
         let Some(custom) = click.data.custom_id.strip_prefix("giveaway:") else {
@@ -301,42 +376,117 @@ impl EventHandler for GiveawayBot {
         let Ok(id) = id.parse() else {
             return;
         };
-        let result = self.db(|db| {
-            db.giveaway_click(
-                &self.guild.to_string(),
-                &click.message.id.to_string(),
-                id,
-                &click.user.id.to_string(),
-                action,
-                system_now_ms(),
-            )
-        });
-        let text = match result {
-            Ok(GiveawayClick::Joined) => "Participação registada.".into(),
-            Ok(GiveawayClick::AlreadyJoined) => "Já estás inscrito.".into(),
-            Ok(GiveawayClick::Left) => "Participação retirada.".into(),
-            Ok(GiveawayClick::Closed) => "Este giveaway está fechado.".into(),
-            Ok(GiveawayClick::NotWinner) => "Este prémio pertence a outro participante.".into(),
-            Ok(GiveawayClick::Expired) => "O prazo para ativar este prémio terminou.".into(),
-            Ok(GiveawayClick::Waiting) => {
-                "Prémio reservado. Será aplicado quando terminar a subscrição paga do mesmo tipo."
-                    .into()
-            }
-            Ok(GiveawayClick::Delivered(expiry)) => format!(
-                "Prémio ativado até <t:{}:F>. Se ganhaste Premium, usa o painel do Vozen para escolher os servidores.",
-                expiry / 1000
-            ),
-            Err(_) => "O Vozen não conseguiu concluir a operação. Tenta novamente.".into(),
-        };
-        let _ = click
+        if click
             .create_response(
                 &ctx.http,
-                CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content(text),
+                CreateInteractionResponse::Defer(
+                    CreateInteractionResponseMessage::new().ephemeral(true),
                 ),
             )
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let original = if click.guild_id.is_none() {
+            self.db(|db| {
+                db.giveaway_dm_original(
+                    id,
+                    &click.user.id.to_string(),
+                    &click.message.id.to_string(),
+                )
+            })
+        } else {
+            Ok(Some(click.message.id.to_string()))
+        };
+        let text = match original {
+            Ok(Some(message)) => {
+                if click.guild_id.is_none()
+                    && self.guild.member(&ctx.http, click.user.id).await.is_err()
+                {
+                    "Please join Vozen Support and try again. Your prize is reserved until the claim deadline.".to_owned()
+                } else {
+                    let result = self.db(|db| {
+                        db.giveaway_click(
+                            &self.guild.to_string(),
+                            &message,
+                            id,
+                            &click.user.id.to_string(),
+                            action,
+                            system_now_ms(),
+                        )
+                    });
+                    match result {
+                        Ok(GiveawayClick::VoteRequired) => format!("Vote for Vozen to enter: {VOTE_URL}. Each confirmed vote during the giveaway adds one entry."),
+                        Ok(GiveawayClick::Left) => "Your entries have been removed.".to_owned(),
+                        Ok(GiveawayClick::Closed) => "This giveaway is closed.".to_owned(),
+                        Ok(GiveawayClick::NotWinner) => "This prize belongs to another participant.".to_owned(),
+                        Ok(GiveawayClick::Expired) => "The deadline to claim this prize has passed.".to_owned(),
+                        Ok(GiveawayClick::Waiting) => "Prize reserved. It will activate after your paid subscription of the same type ends.".to_owned(),
+                        Ok(GiveawayClick::Delivered(expiry)) => format!("Your prize is active until <t:{}:F>. Manage your Vozen plans and Premium servers at https://vozen.org/account/.",expiry/1000),
+                        Err(_) => "Vozen could not complete this request. Please try again.".to_owned(),
+                    }
+                }
+            }
+            Ok(None) => {
+                "This prize message is invalid or belongs to another participant.".to_owned()
+            }
+            Err(_) => "Vozen could not complete this request. Please try again.".to_owned(),
+        };
+        let _ = click
+            .edit_response(&ctx.http, EditInteractionResponse::new().content(text))
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cards_use_english_embeds_vote_links_and_closed_dm_fallback() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let action=serde_json::from_value(serde_json::json!({
+            "action":"save","request_id":"ea01298f-a728-489a-9639-856befd711cc",
+            "channel_id":"200","title":"Internal label","description":"","plan":"plus","days":30,"seats":0,
+            "winner_count":1,"starts_at":0,"ends_at":3600000,"claim_hours":48
+        })).unwrap();
+        store.giveaway_admin("100", action, 1).unwrap().unwrap();
+        let mut g = store.giveaways("100").unwrap().remove(0);
+        let (embed, buttons) = announcement(&g, true);
+        let card = serde_json::to_value(embed).unwrap();
+        assert_eq!(card["title"], "🎉 Giveaway for Vozen Plus (1 Month)");
+        assert_eq!(card["footer"]["text"], "Each confirmed vote adds one entry");
+        assert_eq!(
+            serde_json::to_value(buttons).unwrap()[0]["components"][0]["url"],
+            VOTE_URL
+        );
+        g.status = "closed".into();
+        g.awards.push(GiveawayAward {
+            id: 1,
+            user_id: "501".into(),
+            deadline: 9000000,
+            accepted_at: None,
+            expires_at: None,
+            replaced: false,
+            replace_requested: false,
+            delivery_error: false,
+            entries: 3,
+            dm_channel: None,
+            dm_message: None,
+            dm_attempt: None,
+            dm_blocked: true,
+        });
+        let (embed, buttons) = announcement(&g, false);
+        assert!(
+            serde_json::to_value(embed).unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .contains("<@501> (3 entries)")
+        );
+        assert_eq!(
+            serde_json::to_value(buttons).unwrap()[0]["components"][0]["label"],
+            "Claim prize"
+        );
     }
 }

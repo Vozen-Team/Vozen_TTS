@@ -47,7 +47,7 @@ pub async fn import_and_reconcile(
     tables.retain(|name| {
         !matches!(
             name.as_str(),
-            "giveaway" | "giveaway_entry" | "giveaway_award"
+            "giveaway" | "giveaway_entry" | "giveaway_award" | "giveaway_vote" | "giveaway_dm"
         )
     });
     let mut transaction = pool.begin().await.map_err(ImportError::Postgres)?;
