@@ -343,6 +343,13 @@ mod tests {
                 .message("tts.notInVoice", "fr")
                 .is_some_and(|message| !message.is_empty())
         );
+        for locale in &catalog.supported_locales {
+            let title = catalog
+                .message("voice.browse.title", locale)
+                .expect("voice catalog title");
+            assert!(title.contains(" — "), "{locale}: {title}");
+            assert!(title.contains("{page}/{pages}"), "{locale}: {title}");
+        }
     }
 
     #[test]
