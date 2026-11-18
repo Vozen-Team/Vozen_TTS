@@ -135,6 +135,17 @@ impl SqliteStore {
         now: i64,
         redemption_secret: &str,
     ) -> Result<TopggVoteRewardResult, StoreError> {
+        self.claim_topgg_vote_reward_at(event_id, user_id, now, redemption_secret, None)
+    }
+
+    pub fn claim_topgg_vote_reward_at(
+        &self,
+        event_id: Option<&str>,
+        user_id: &str,
+        now: i64,
+        redemption_secret: &str,
+        voted_at: Option<i64>,
+    ) -> Result<TopggVoteRewardResult, StoreError> {
         if let Some(event_id) = event_id {
             validate_event_id(event_id)?;
         }
@@ -152,6 +163,14 @@ impl SqliteStore {
                 return Ok(TopggVoteRewardResult::DuplicateEvent);
             }
             crate::growth_lifecycle::add_topgg_vote_daily(&transaction, now)?;
+            if let Some(voted_at) = voted_at.filter(|time| *time <= now && *time >= 0) {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at)
+                     SELECT id,?1,?2,?3 FROM giveaway
+                     WHERE status='open' AND starts_at<=?3 AND ends_at>?4 AND ends_at>?3",
+                    params![event_id, user_id, voted_at, now],
+                )?;
+            }
         }
 
         let grants_in_window: i64 = transaction.query_row(

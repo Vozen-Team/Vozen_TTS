@@ -372,7 +372,19 @@ impl SqliteStore {
         // Schema installation and historical upgrades must commit together. A failed ALTER or
         // privacy cleanup must leave the database exactly as it was before Rust opened it.
         let transaction = connection.transaction()?;
+        let upgrade_giveaways = !transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='giveaway_dm')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
         install_current_schema(&transaction)?;
+        if upgrade_giveaways {
+            // Refresh the preceding plain-text announcements once after the embed upgrade.
+            transaction.execute(
+                "UPDATE giveaway SET revision=revision+1 WHERE message_id IS NOT NULL",
+                [],
+            )?;
+        }
         migration::migrate_legacy_schema(&transaction)?;
         runtime_outbox::install_runtime_outbox_schema(&transaction)?;
         verify_connection_integrity(&transaction)?;

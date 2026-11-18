@@ -105,12 +105,16 @@ pub struct GiveawayAward {
     pub replaced: bool,
     pub replace_requested: bool,
     pub delivery_error: bool,
+    pub entries: i64,
+    pub dm_channel: Option<String>,
+    pub dm_message: Option<String>,
+    pub dm_attempt: Option<i64>,
+    pub dm_blocked: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum GiveawayClick {
-    Joined,
-    AlreadyJoined,
+    VoteRequired,
     Left,
     Closed,
     NotWinner,
@@ -147,12 +151,15 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Giveaway> {
 
 fn details(db: &Connection, g: &mut Giveaway) -> Result<(), StoreError> {
     g.entries = db.query_row(
-        "SELECT COUNT(*) FROM giveaway_entry WHERE giveaway_id=?1",
+        "SELECT (SELECT COUNT(*) FROM giveaway_entry WHERE giveaway_id=?1) + (SELECT COUNT(*) FROM giveaway_vote WHERE giveaway_id=?1)",
         [g.id],
         |r| r.get(0),
     )?;
-    let mut stmt = db.prepare("SELECT id,user_id,deadline,accepted_at,expires_at,replaced,replace_requested,delivery_error
-        FROM giveaway_award WHERE giveaway_id=?1 ORDER BY id")?;
+    let mut stmt = db.prepare("SELECT a.id,a.user_id,a.deadline,a.accepted_at,a.expires_at,a.replaced,a.replace_requested,a.delivery_error,
+        (SELECT COUNT(*) FROM giveaway_entry e WHERE e.giveaway_id=a.giveaway_id AND e.user_id=a.user_id)
+        + (SELECT COUNT(*) FROM giveaway_vote v WHERE v.giveaway_id=a.giveaway_id AND v.user_id=a.user_id),
+        d.channel_id,d.message_id,d.last_attempt,COALESCE(d.blocked,0)
+        FROM giveaway_award a LEFT JOIN giveaway_dm d ON d.award_id=a.id WHERE a.giveaway_id=?1 ORDER BY a.id")?;
     g.awards = stmt
         .query_map([g.id], |r| {
             Ok(GiveawayAward {
@@ -164,6 +171,11 @@ fn details(db: &Connection, g: &mut Giveaway) -> Result<(), StoreError> {
                 replaced: r.get(5)?,
                 replace_requested: r.get(6)?,
                 delivery_error: r.get(7)?,
+                entries: r.get(8)?,
+                dm_channel: r.get(9)?,
+                dm_message: r.get(10)?,
+                dm_attempt: r.get(11)?,
+                dm_blocked: r.get(12)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -270,6 +282,9 @@ impl SqliteStore {
         let mut stmt = db.prepare(&format!("SELECT {FIELDS} FROM giveaway g WHERE guild_id=?2 AND (
             (status='scheduled' AND starts_at<=?1 AND error IS NULL) OR (status='open' AND ends_at<=?1)
             OR (message_id IS NOT NULL AND synced<revision)
+            OR EXISTS (SELECT 1 FROM giveaway_award a LEFT JOIN giveaway_dm d ON d.award_id=a.id
+                WHERE a.giveaway_id=g.id AND a.replaced=0 AND a.accepted_at IS NULL AND a.deadline>?1
+                AND d.message_id IS NULL AND COALESCE(d.blocked,0)=0 AND COALESCE(d.last_attempt,0)<=?1-60000)
             OR EXISTS(SELECT 1 FROM giveaway_award a WHERE a.giveaway_id=g.id AND (a.replace_requested=1
               OR (a.accepted_at IS NOT NULL AND a.expires_at IS NULL AND NOT EXISTS ({PAID}))))
             )
@@ -319,9 +334,13 @@ impl SqliteStore {
     }
 
     pub fn giveaway_candidates(&self, id: i64) -> Result<Vec<String>, StoreError> {
-        let mut stmt = self.connection().prepare("SELECT e.user_id FROM giveaway_entry e WHERE e.giveaway_id=?1
-            AND NOT EXISTS (SELECT 1 FROM giveaway_award a WHERE a.giveaway_id=e.giveaway_id AND a.user_id=e.user_id)
-            ORDER BY random()")?;
+        // Shuffle tickets, then the runtime skips users already selected for this draw.
+        let mut stmt = self.connection().prepare("SELECT user_id FROM (
+            SELECT user_id,giveaway_id FROM giveaway_entry
+            UNION ALL SELECT user_id,giveaway_id FROM giveaway_vote
+        ) e WHERE giveaway_id=?1
+        AND NOT EXISTS(SELECT 1 FROM giveaway_award a WHERE a.giveaway_id=e.giveaway_id AND a.user_id=e.user_id)
+        ORDER BY random()")?;
         Ok(stmt
             .query_map([id], |r| r.get(0))?
             .collect::<Result<_, _>>()?)
@@ -338,7 +357,8 @@ impl SqliteStore {
         let mut eligible = Vec::with_capacity(candidates.len());
         for user in candidates {
             let exists: bool = tx.query_row(
-                "SELECT EXISTS (SELECT 1 FROM giveaway_entry WHERE giveaway_id=?1 AND user_id=?2)",
+                "SELECT EXISTS (SELECT 1 FROM giveaway_entry WHERE giveaway_id=?1 AND user_id=?2
+                    UNION ALL SELECT 1 FROM giveaway_vote WHERE giveaway_id=?1 AND user_id=?2)",
                 params![id, user],
                 |r| r.get(0),
             )?;
@@ -367,12 +387,12 @@ impl SqliteStore {
             tx.execute(
                 "INSERT INTO giveaway_award (giveaway_id,user_id,deadline)
                 SELECT g.id,?2,?3+g.claim_hours*3600000 FROM giveaway g
-                JOIN giveaway_entry e ON e.giveaway_id=g.id AND e.user_id=?2 WHERE g.id=?1",
+                WHERE g.id=?1",
                 params![id, user, now],
             )?;
         }
         let error = (replace.is_some() && candidates.is_empty())
-            .then_some("Sem participantes elegíveis para substituir este vencedor.");
+            .then_some("There are no eligible participants to replace this winner.");
         tx.execute(
             "UPDATE giveaway SET revision=revision+1,error=?2 WHERE id=?1",
             params![id, error],
@@ -436,18 +456,12 @@ impl SqliteStore {
             return Ok(GiveawayClick::Closed);
         }
         match action {
-            "join" => {
-                let created = db.execute(
-                    "INSERT INTO giveaway_entry VALUES (?1,?2) ON CONFLICT DO NOTHING",
+            "join" => Ok(GiveawayClick::VoteRequired),
+            "leave" => {
+                db.execute(
+                    "DELETE FROM giveaway_vote WHERE giveaway_id=?1 AND user_id=?2",
                     params![id, user],
                 )?;
-                Ok(if created == 1 {
-                    GiveawayClick::Joined
-                } else {
-                    GiveawayClick::AlreadyJoined
-                })
-            }
-            "leave" => {
                 db.execute(
                     "DELETE FROM giveaway_entry WHERE giveaway_id=?1 AND user_id=?2",
                     params![id, user],
@@ -456,6 +470,52 @@ impl SqliteStore {
             }
             _ => Ok(GiveawayClick::Closed),
         }
+    }
+
+    pub fn giveaway_dm_attempt(&self, award: i64, now: i64) -> Result<(), StoreError> {
+        self.connection().execute(
+            "INSERT INTO giveaway_dm (award_id,last_attempt) VALUES (?1,?2)
+             ON CONFLICT(award_id) DO UPDATE SET last_attempt=excluded.last_attempt",
+            params![award, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn giveaway_dm_sent(
+        &self,
+        award: i64,
+        channel: &str,
+        message: &str,
+    ) -> Result<(), StoreError> {
+        self.connection().execute(
+            "UPDATE giveaway_dm SET channel_id=?2,message_id=?3 WHERE award_id=?1",
+            params![award, channel, message],
+        )?;
+        Ok(())
+    }
+
+    pub fn giveaway_dm_blocked(&self, id: i64, award: i64) -> Result<(), StoreError> {
+        let tx = self.connection().unchecked_transaction()?;
+        tx.execute(
+            "UPDATE giveaway_dm SET blocked=1 WHERE award_id=?1",
+            [award],
+        )?;
+        tx.execute("UPDATE giveaway SET revision=revision+1 WHERE id=?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn giveaway_dm_original(
+        &self,
+        id: i64,
+        user: &str,
+        message: &str,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self.connection().query_row(
+            "SELECT g.message_id FROM giveaway g JOIN giveaway_award a ON a.giveaway_id=g.id
+             JOIN giveaway_dm d ON d.award_id=a.id WHERE g.id=?1 AND a.user_id=?2 AND d.message_id=?3",
+            params![id,user,message],|r|r.get(0),
+        ).optional()?)
     }
 
     pub fn giveaway_deliver(&self, award: i64, now: i64) -> Result<GiveawayClick, StoreError> {
@@ -536,18 +596,19 @@ mod tests {
                 .unwrap(),
             GiveawayClick::Closed
         );
-        for user in ["501", "502", "503"] {
-            assert_eq!(
-                db.giveaway_click("100", "300", id, user, "join", NOW)
-                    .unwrap(),
-                GiveawayClick::Joined
-            );
-        }
         assert_eq!(
             db.giveaway_click("100", "300", id, "501", "join", NOW)
                 .unwrap(),
-            GiveawayClick::AlreadyJoined
+            GiveawayClick::VoteRequired
         );
+        for user in ["501", "502", "503"] {
+            db.connection()
+                .execute(
+                    "INSERT INTO giveaway_entry VALUES (?1,?2)",
+                    params![id, user],
+                )
+                .unwrap();
+        }
         assert_eq!(
             db.giveaway_click("100", "300", id, "504", "join", NOW + HOUR)
                 .unwrap(),
@@ -558,6 +619,11 @@ mod tests {
         db.giveaway_draw(id, None, &["503".into()], NOW + HOUR)
             .unwrap();
         assert_eq!(db.giveaways("100").unwrap()[0].awards.len(), 2);
+        for award in &db.giveaways("100").unwrap()[0].awards {
+            db.giveaway_dm_attempt(award.id, NOW + HOUR).unwrap();
+            db.giveaway_dm_sent(award.id, "test-dm", &format!("dm-{}", award.id))
+                .unwrap();
+        }
         (db, id)
     }
 
@@ -699,5 +765,71 @@ mod tests {
             db.giveaway_deliver(award.id, later).unwrap(),
             GiveawayClick::Delivered(later + 30 * DAY_MS)
         );
+    }
+    #[test]
+    fn dm_claim_context_is_bound_to_the_campaign_winner_and_message() {
+        let (db, id) = setup("plus");
+        let awards = &db.giveaways("100").unwrap()[0].awards;
+        let award = awards[0].id;
+        db.giveaway_dm_attempt(award, NOW).unwrap();
+        db.giveaway_dm_sent(award, "dm-channel", "dm-message")
+            .unwrap();
+        assert_eq!(
+            db.giveaway_dm_original(id, "501", "dm-message").unwrap(),
+            Some("300".into())
+        );
+        assert_eq!(
+            db.giveaway_dm_original(id, "502", "dm-message").unwrap(),
+            None
+        );
+        assert_eq!(
+            db.giveaway_dm_original(id + 1, "501", "dm-message")
+                .unwrap(),
+            None
+        );
+        assert_eq!(db.giveaway_dm_original(id, "501", "forged").unwrap(), None);
+        db.giveaway_dm_blocked(id, award).unwrap();
+        assert!(db.giveaways("100").unwrap()[0].awards[0].dm_blocked);
+        db.erase_user_data("501").unwrap();
+        assert_eq!(
+            db.giveaway_dm_original(id, "501", "dm-message").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn vote_tickets_respect_the_open_window_and_fail_atomically() {
+        const USER: &str = "12345678901234567";
+        const SECRET: &str = "0123456789abcdef0123456789abcdef";
+        let (db, id) = setup("plus");
+        db.connection()
+            .execute(
+                "UPDATE giveaway SET status='open',starts_at=?2 WHERE id=?1",
+                params![id, NOW],
+            )
+            .unwrap();
+        db.claim_topgg_vote_reward_at(Some("old"), USER, NOW + 1, SECRET, Some(NOW - 1))
+            .unwrap();
+        assert_eq!(db.giveaways("100").unwrap()[0].entries, 3);
+        db.connection().execute_batch("CREATE TEMP TRIGGER fail_vote BEFORE INSERT ON giveaway_vote BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+        assert!(
+            db.claim_topgg_vote_reward_at(Some("retry"), USER, NOW + 2, SECRET, Some(NOW + 1))
+                .is_err()
+        );
+        db.connection()
+            .execute_batch("DROP TRIGGER fail_vote")
+            .unwrap();
+        db.claim_topgg_vote_reward_at(Some("retry"), USER, NOW + 2, SECRET, Some(NOW + 1))
+            .unwrap();
+        assert_eq!(db.giveaways("100").unwrap()[0].entries, 4);
+        db.claim_topgg_vote_reward_at(
+            Some("after-end"),
+            USER,
+            NOW + HOUR,
+            SECRET,
+            Some(NOW + HOUR),
+        )
+        .unwrap();
+        assert_eq!(db.giveaways("100").unwrap()[0].entries, 4);
     }
 }

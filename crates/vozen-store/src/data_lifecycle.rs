@@ -244,6 +244,8 @@ impl SqliteStore {
              (SELECT giveaway_id FROM giveaway_award WHERE user_id=?1 AND replaced=0)",
             [user_id],
         )?;
+        transaction.execute("DELETE FROM giveaway_dm WHERE award_id IN (SELECT id FROM giveaway_award WHERE user_id=?1)", [user_id])?;
+        transaction.execute("DELETE FROM giveaway_vote WHERE user_id=?1", [user_id])?;
         transaction.execute("DELETE FROM giveaway_award WHERE user_id=?1", [user_id])?;
         transaction.execute("DELETE FROM giveaway_entry WHERE user_id=?1", [user_id])?;
         if legacy_persona_exists(&transaction)? {

@@ -18,6 +18,7 @@ pub const TOPGG_SIGNATURE_TOLERANCE_MS: i64 = 5 * 60 * 1_000;
 pub struct TopggVote {
     pub user_id: String,
     pub event_id: Option<String>,
+    pub voted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +88,13 @@ pub fn verify_topgg_webhook(
         return TopggWebhookDecision::Rejected(TopggWebhookRejection::WrongProject);
     }
     if is_upvote && !user_id.is_empty() {
-        TopggWebhookDecision::Upvote(TopggVote { user_id, event_id })
+        let voted_at =
+            object_field(&payload, "data").and_then(|data| string_field(data, "created_at"));
+        TopggWebhookDecision::Upvote(TopggVote {
+            user_id,
+            event_id,
+            voted_at,
+        })
     } else {
         TopggWebhookDecision::Acknowledged
     }
@@ -191,6 +198,7 @@ mod tests {
                 Some("bot"),
             ),
             TopggWebhookDecision::Upvote(TopggVote {
+                voted_at: None,
                 user_id: "user".into(),
                 event_id: Some("event".into()),
             })
@@ -231,6 +239,7 @@ mod tests {
                 Some("bot"),
             ),
             TopggWebhookDecision::Upvote(TopggVote {
+                voted_at: None,
                 user_id: "user".into(),
                 event_id: None,
             })
