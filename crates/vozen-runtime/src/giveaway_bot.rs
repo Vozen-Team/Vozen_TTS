@@ -43,7 +43,27 @@ pub fn spawn(store: Arc<Mutex<SqliteStore>>) {
         return;
     };
     tokio::spawn(async move {
-        let bot = GiveawayBot { store, guild };
+        let three_bots = three_bots_enabled(
+            std::env::var("VOZEN_GIVEAWAY_THREE_BOTS_ENABLED")
+                .ok()
+                .as_deref(),
+            [
+                std::env::var("TOPGG_HELPER_WEBHOOK_SECRET").ok().as_deref(),
+                std::env::var("TOPGG_MUSIC_WEBHOOK_SECRET").ok().as_deref(),
+            ],
+        );
+        let bot = GiveawayBot {
+            store,
+            guild,
+            three_bots,
+        };
+        if bot
+            .db(|db| db.giveaway_refresh_open(&guild.to_string()))
+            .is_err()
+        {
+            eprintln!("[giveaways] failed to refresh announcements");
+            return;
+        }
         let client = Client::builder(&token, GatewayIntents::GUILDS)
             .event_handler(bot.clone())
             .await;
@@ -65,6 +85,7 @@ type BotError = Box<dyn std::error::Error + Send + Sync>;
 struct GiveawayBot {
     store: Arc<Mutex<SqliteStore>>,
     guild: GuildId,
+    three_bots: bool,
 }
 
 impl GiveawayBot {
@@ -128,7 +149,7 @@ impl GiveawayBot {
                     )
                 });
             }
-            let (embed, components) = announcement(g, true);
+            let (embed, components) = announcement(g, true, self.three_bots);
             let message = channel
                 .send_message(
                     http,
@@ -182,7 +203,7 @@ impl GiveawayBot {
         if let Some(msg) = &g.message_id
             && g.synced < g.revision
         {
-            let (embed, components) = announcement(g, false);
+            let (embed, components) = announcement(g, false, self.three_bots);
             channel
                 .edit_message(
                     http,
@@ -271,6 +292,13 @@ fn button(g: i64, action: &str, label: &str, style: ButtonStyle) -> CreateButton
 
 const VOTE_RULE: &str = "Up to 3 entries: one vote per bot";
 
+fn three_bots_enabled(flag: Option<&str>, secrets: [Option<&str>; 2]) -> bool {
+    flag == Some("true")
+        && secrets
+            .iter()
+            .all(|secret| secret.is_some_and(|value| !value.trim().is_empty()))
+}
+
 fn prize(g: &Giveaway) -> String {
     let plan = if g.plan == "plus" {
         "Plus".to_owned()
@@ -287,7 +315,11 @@ fn prize(g: &Giveaway) -> String {
     format!("Vozen {plan} ({duration})")
 }
 
-fn announcement(g: &Giveaway, opening: bool) -> (CreateEmbed, Vec<CreateActionRow>) {
+fn announcement(
+    g: &Giveaway,
+    opening: bool,
+    three_bots: bool,
+) -> (CreateEmbed, Vec<CreateActionRow>) {
     let mut embed = CreateEmbed::new().colour(0xA4A4FF);
     if !g.description.is_empty() {
         embed = embed.field("Details", &g.description, false);
@@ -305,11 +337,15 @@ fn announcement(g: &Giveaway, opening: bool) -> (CreateEmbed, Vec<CreateActionRo
                 g.winner_count,
                 g.ends_at / 1000
             ))
-            .footer(CreateEmbedFooter::new(VOTE_RULE));
+            .footer(CreateEmbedFooter::new(if three_bots {
+                VOTE_RULE
+            } else {
+                "One entry per person: vote for TTS"
+            }));
         return (
             embed,
             vec![CreateActionRow::Buttons(
-                vozen_core::GIVEAWAY_VOTE_BOTS
+                vozen_core::GIVEAWAY_VOTE_BOTS[..if three_bots { 3 } else { 1 }]
                     .iter()
                     .map(|(name, id)| {
                         CreateButton::new_link(format!("https://top.gg/bot/{id}/vote"))
@@ -423,7 +459,8 @@ impl EventHandler for GiveawayBot {
                         )
                     });
                     match result {
-                        Ok(GiveawayClick::VoteRequired) => "Vote using the TTS, Helper or Music buttons on the giveaway message. Each bot gives one entry, up to 3 entries per person for this giveaway.".into(),
+                        Ok(GiveawayClick::VoteRequired) if self.three_bots => "Vote using the TTS, Helper or Music buttons on the giveaway message. Each bot gives one entry, up to 3 entries per person for this giveaway.".into(),
+                        Ok(GiveawayClick::VoteRequired) => "Vote using the TTS button on the giveaway message. One entry per person for this giveaway.".into(),
                         Ok(GiveawayClick::Left) => "Your entries have been removed.".to_owned(),
                         Ok(GiveawayClick::Closed) => "This giveaway is closed.".to_owned(),
                         Ok(GiveawayClick::NotWinner) => "This prize belongs to another participant.".to_owned(),
@@ -450,6 +487,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extra_vote_buttons_require_explicit_activation_and_both_secrets() {
+        assert!(!three_bots_enabled(None, [Some("helper"), Some("music")]));
+        assert!(!three_bots_enabled(
+            Some("false"),
+            [Some("helper"), Some("music")]
+        ));
+        assert!(!three_bots_enabled(Some("true"), [Some("helper"), None]));
+        assert!(!three_bots_enabled(
+            Some("true"),
+            [Some("helper"), Some(" ")]
+        ));
+        assert!(three_bots_enabled(
+            Some("true"),
+            [Some("helper"), Some("music")]
+        ));
+    }
+
+    #[test]
     fn cards_use_english_embeds_vote_links_and_closed_dm_fallback() {
         let store = SqliteStore::open_in_memory().unwrap();
         let action=serde_json::from_value(serde_json::json!({
@@ -459,7 +514,7 @@ mod tests {
         })).unwrap();
         store.giveaway_admin("100", action, 1).unwrap().unwrap();
         let mut g = store.giveaways("100").unwrap().remove(0);
-        let (embed, buttons) = announcement(&g, true);
+        let (embed, buttons) = announcement(&g, true, true);
         let card = serde_json::to_value(embed).unwrap();
         assert_eq!(card["title"], "🎉 Giveaway for Vozen Plus (1 Month)");
         assert_eq!(card["footer"]["text"], VOTE_RULE);
@@ -475,6 +530,17 @@ mod tests {
                 format!("Vote for {name}")
             );
         }
+        let (pending_card, pending_buttons) = announcement(&g, true, false);
+        assert_eq!(
+            serde_json::to_value(pending_card).unwrap()["footer"]["text"],
+            "One entry per person: vote for TTS"
+        );
+        let pending_buttons = serde_json::to_value(pending_buttons).unwrap();
+        assert_eq!(
+            pending_buttons[0]["components"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(pending_buttons[0]["components"][0]["label"], "Vote for TTS");
         g.status = "closed".into();
         g.awards.push(GiveawayAward {
             id: 1,
@@ -491,7 +557,7 @@ mod tests {
             dm_attempt: None,
             dm_blocked: true,
         });
-        let (embed, buttons) = announcement(&g, false);
+        let (embed, buttons) = announcement(&g, false, true);
         assert!(
             serde_json::to_value(embed).unwrap()["description"]
                 .as_str()
@@ -572,6 +638,7 @@ mod tests {
             let bot = GiveawayBot {
                 store: Arc::new(Mutex::new(store)),
                 guild: GuildId::new(100),
+                three_bots: false,
             };
             bot.notify(&http, &g, &g.awards[0]).await.unwrap();
             let payload = recorded.lock().unwrap().clone().unwrap();

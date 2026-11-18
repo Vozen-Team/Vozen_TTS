@@ -277,6 +277,14 @@ impl SqliteStore {
         Ok(id)
     }
 
+    /// Re-render open cards after a restart so a vote-button activation reaches existing giveaways.
+    pub fn giveaway_refresh_open(&self, guild: &str) -> Result<usize, StoreError> {
+        Ok(self.connection().execute(
+            "UPDATE giveaway SET revision=revision+1 WHERE guild_id=?1 AND status='open' AND message_id IS NOT NULL",
+            [guild],
+        )?)
+    }
+
     pub fn giveaway_jobs(&self, guild: &str, now: i64) -> Result<Vec<Giveaway>, StoreError> {
         let db = self.connection();
         let mut stmt = db.prepare(&format!("SELECT {FIELDS} FROM giveaway g WHERE guild_id=?2 AND (
@@ -889,5 +897,17 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+    #[test]
+    fn refreshing_cards_only_marks_open_giveaways_in_the_support_guild() {
+        let (db, id) = setup("plus");
+        assert_eq!(db.giveaway_refresh_open("100").unwrap(), 0);
+        db.connection()
+            .execute("UPDATE giveaway SET status='open' WHERE id=?1", [id])
+            .unwrap();
+        let before = db.giveaways("100").unwrap()[0].revision;
+        assert_eq!(db.giveaway_refresh_open("other").unwrap(), 0);
+        assert_eq!(db.giveaway_refresh_open("100").unwrap(), 1);
+        assert_eq!(db.giveaways("100").unwrap()[0].revision, before + 1);
     }
 }

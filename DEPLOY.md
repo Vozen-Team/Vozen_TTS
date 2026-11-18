@@ -116,5 +116,10 @@ available and the corresponding URLs are saved on top.gg:
 
 Each route verifies its own signature and exact Discord application ID. Missing
 secrets leave those routes absent. Helper and Music votes only enter giveaways;
-they do not grant the separate TTS Plus vote promotion. Never activate the new
-three-button card while either listing or its webhook is unavailable.
+they do not grant the separate TTS Plus vote promotion. The additional buttons stay hidden by default. Set
+`VOZEN_GIVEAWAY_THREE_BOTS_ENABLED=true` only after both listings are approved
+and both signed webhooks pass a provider test. Both secrets must be non-empty
+before the extra buttons can appear. Restart through the encrypted runtime
+service; existing open announcements are refreshed automatically. Publish the
+reviewed three-button private-panel HTML at the same time. Endpoint preparation
+and deployment are safe while this flag remains false.
