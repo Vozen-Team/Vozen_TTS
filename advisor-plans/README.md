@@ -107,20 +107,20 @@ plan was vetted by reading the cited code at that commit.
 
 ## Execution order & status
 
-| Plan | Title                                                                           | Priority | Effort | Depends on | Status |
-| ---- | ------------------------------------------------------------------------------- | -------- | ------ | ---------- | ------ |
-| 019  | Grant 24 hours of Plus per vote and stop phantom ledger backfill                | P1       | S      | —          | TODO   |
-| 020  | Make giveaway entries match the published rules and keep draws alive            | P1       | M      | 019        | TODO   |
-| 021  | Make Kokoro and neural multi-segment audio work and cache correctly             | P1       | M      | —          | TODO   |
-| 022  | Stop spoken spoilers, URLs and invisible-character blocklist bypasses           | P1       | S      | —          | TODO   |
-| 023  | Honour the accessibility priority lane in Songbird playback                     | P2       | M      | —          | TODO   |
-| 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | TODO   |
-| 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | TODO   |
-| 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | TODO   |
-| 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | TODO   |
-| 028  | Make shut-up, skip and pause race-free and keep paired speech together          | P3       | M      | 021, 023   | TODO   |
-| 029  | Fix outbox timestamp units, oversized batches and stale replica triggers        | P3       | S      | —          | TODO   |
-| 030  | Prevent duplicate Stripe subscriptions, stale statuses and partial Ko-fi orders | P3       | M      | —          | TODO   |
+| Plan | Title                                                                           | Priority | Effort | Depends on | Status         |
+| ---- | ------------------------------------------------------------------------------- | -------- | ------ | ---------- | -------------- |
+| 019  | Grant 24 hours of Plus per vote and stop phantom ledger backfill                | P1       | S      | —          | DONE (cc94be4) |
+| 020  | Make giveaway entries match the published rules and keep draws alive            | P1       | M      | 019        | TODO           |
+| 021  | Make Kokoro and neural multi-segment audio work and cache correctly             | P1       | M      | —          | TODO           |
+| 022  | Stop spoken spoilers, URLs and invisible-character blocklist bypasses           | P1       | S      | —          | TODO           |
+| 023  | Honour the accessibility priority lane in Songbird playback                     | P2       | M      | —          | TODO           |
+| 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | TODO           |
+| 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | TODO           |
+| 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | TODO           |
+| 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | TODO           |
+| 028  | Make shut-up, skip and pause race-free and keep paired speech together          | P3       | M      | 021, 023   | TODO           |
+| 029  | Fix outbox timestamp units, oversized batches and stale replica triggers        | P3       | S      | —          | TODO           |
+| 030  | Prevent duplicate Stripe subscriptions, stale statuses and partial Ko-fi orders | P3       | M      | —          | TODO           |
 
 Status values: TODO | IN PROGRESS | DONE (commit) | BLOCKED (reason) | REJECTED (reason)
 

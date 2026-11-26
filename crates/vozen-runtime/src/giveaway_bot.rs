@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    num::NonZeroU64,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -57,12 +58,13 @@ pub fn spawn(store: Arc<Mutex<SqliteStore>>) {
             guild,
             three_bots,
         };
-        if bot
+        // A transient store error must not disable giveaways for the rest of the process.
+        while bot
             .db(|db| db.giveaway_refresh_open(&guild.to_string()))
             .is_err()
         {
-            eprintln!("[giveaways] failed to refresh announcements");
-            return;
+            eprintln!("[giveaways] failed to refresh announcements; retrying in 30s");
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
         let client = Client::builder(&token, GatewayIntents::GUILDS)
             .event_handler(bot.clone())
@@ -72,9 +74,14 @@ pub fn spawn(store: Arc<Mutex<SqliteStore>>) {
             return;
         };
         let http = client.http.clone();
-        tokio::select! {
-            _ = client.start() => eprintln!("[giveaways] Discord gateway stopped"),
-            _ = bot.run(&http) => (),
+        // Publication, draws and winner DMs only need REST, so they keep running even if the
+        // gateway connection ends.
+        let jobs = bot.clone();
+        tokio::spawn(async move { jobs.run(&http).await });
+        if let Err(error) = client.start().await {
+            eprintln!("[giveaways] Discord gateway stopped: {error}");
+        } else {
+            eprintln!("[giveaways] Discord gateway stopped");
         }
     });
 }
@@ -204,7 +211,7 @@ impl GiveawayBot {
             && g.synced < g.revision
         {
             let (embed, components) = announcement(g, false, self.three_bots);
-            channel
+            let edited = channel
                 .edit_message(
                     http,
                     MessageId::new(msg.parse()?),
@@ -214,7 +221,19 @@ impl GiveawayBot {
                         .components(components)
                         .allowed_mentions(CreateAllowedMentions::new()),
                 )
-                .await?;
+                .await;
+            match edited {
+                Ok(_) => {}
+                // The announcement was deleted or the bot lost access. Retrying every tick would
+                // only add rate-limit pressure; the giveaway itself still draws and notifies.
+                Err(error) if discord_permission_error(&error) => {
+                    eprintln!(
+                        "[giveaways] campaign {}: announcement can no longer be edited",
+                        g.id
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
             self.db(|db| db.giveaway_sync(g.id, g.revision))?;
         }
         Ok(())
@@ -227,7 +246,7 @@ impl GiveawayBot {
         award: &GiveawayAward,
     ) -> Result<(), BotError> {
         self.db(|db| db.giveaway_dm_attempt(award.id, system_now_ms()))?;
-        let user = UserId::new(award.user_id.parse()?);
+        let user = UserId::from(award.user_id.parse::<NonZeroU64>()?);
         let result = async {
             let channel=user.create_dm_channel(http).await?;
             channel.send_message(http,CreateMessage::new()
@@ -256,15 +275,16 @@ impl GiveawayBot {
     async fn eligible(&self, http: &Http, id: i64, count: usize) -> Result<Vec<String>, BotError> {
         let mut winners = Vec::new();
         let mut seen = HashSet::new();
-        for candidate in self.db(|db| db.giveaway_candidates(id))? {
+        for candidate in self.db(|db| db.giveaway_candidates(id, self.three_bots))? {
             if !seen.insert(candidate.clone()) {
                 continue;
             }
-            match self
-                .guild
-                .member(http, UserId::new(candidate.parse()?))
-                .await
-            {
+            // `UserId::new` panics on zero; an unusable ticket must not stop the whole draw.
+            let Ok(user_id) = candidate.parse::<NonZeroU64>() else {
+                eprintln!("[giveaways] campaign {id}: skipped a ticket with an invalid user id");
+                continue;
+            };
+            match self.guild.member(http, UserId::from(user_id)).await {
                 Ok(member) if !member.user.bot => winners.push(candidate),
                 Ok(_) => (),
                 Err(error) if matches!(&error, serenity::Error::Http(serenity::http::HttpError::UnsuccessfulRequest(response)) if response.error.code == 10007) =>

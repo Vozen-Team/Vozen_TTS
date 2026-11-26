@@ -168,7 +168,7 @@ impl SqliteStore {
                 return Ok(TopggVoteRewardResult::DuplicateEvent);
             }
             crate::growth_lifecycle::add_topgg_vote_daily(&transaction, now)?;
-            if let Some(voted_at) = voted_at.filter(|time| *time <= now && *time >= 0) {
+            if let Some(voted_at) = voted_at.and_then(|time| effective_vote_time(time, now)) {
                 insert_giveaway_vote(
                     &transaction,
                     vozen_core::GIVEAWAY_VOTE_BOTS[0].1,
@@ -224,14 +224,13 @@ impl SqliteStore {
         now: i64,
     ) -> Result<usize, StoreError> {
         validate_event_id(event_id)?;
+        let Some(voted_at) = effective_vote_time(voted_at, now) else {
+            return Ok(0);
+        };
         if !vozen_core::GIVEAWAY_VOTE_BOTS
             .iter()
             .any(|(_, id)| *id == bot_id)
-            || user_id.is_empty()
             || user_id.len() > 25
-            || !user_id.bytes().all(|c| c.is_ascii_digit())
-            || voted_at < 0
-            || voted_at > now
         {
             return Ok(0);
         }
@@ -260,6 +259,23 @@ impl SqliteStore {
     }
 }
 
+/// Top.gg and this host can disagree by a few seconds. A vote stamped within the signature
+/// tolerance ahead of `now` counts as cast now; anything further ahead, or negative, is ignored.
+fn effective_vote_time(voted_at: i64, now: i64) -> Option<i64> {
+    if voted_at < 0 || voted_at > now.saturating_add(vozen_core::TOPGG_SIGNATURE_TOLERANCE_MS) {
+        return None;
+    }
+    Some(voted_at.min(now))
+}
+
+/// Giveaway tickets must hold a real Discord snowflake: the draw turns them into `UserId`s,
+/// and serenity rejects zero.
+fn is_giveaway_user_id(user_id: &str) -> bool {
+    !user_id.is_empty()
+        && user_id.bytes().all(|c| c.is_ascii_digit())
+        && user_id.parse::<u64>().is_ok_and(|id| id != 0)
+}
+
 fn insert_giveaway_vote(
     connection: &Connection,
     bot_id: &str,
@@ -268,6 +284,9 @@ fn insert_giveaway_vote(
     voted_at: i64,
     now: i64,
 ) -> Result<usize, StoreError> {
+    if !is_giveaway_user_id(user_id) {
+        return Ok(0);
+    }
     Ok(connection.execute(
         "INSERT OR IGNORE INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at,bot_id)
          SELECT g.id,?1,?2,?3,?5 FROM giveaway g
