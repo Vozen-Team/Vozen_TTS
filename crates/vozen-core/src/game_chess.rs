@@ -304,7 +304,9 @@ fn parse_move(board: &Chess, text: &str) -> Option<Move> {
     {
         return UciMove::from_ascii(coordinate).ok()?.to_move(board).ok();
     }
-    let san = if lower == "o-o" || lower == "o-o-o" {
+    // Castling typed in lowercase is common in chat, including when it gives check or mate.
+    let castle = lower.strip_suffix(['+', '#']).unwrap_or(&lower);
+    let san = if castle == "o-o" || castle == "o-o-o" {
         text.to_ascii_uppercase()
     } else {
         text.to_owned()
@@ -496,6 +498,19 @@ mod tests {
                 .into_position(shakmaty::CastlingMode::Standard)
                 .unwrap(),
             ..ChessGame::new()
+        }
+    }
+
+    #[test]
+    fn lowercase_castling_that_gives_check_is_accepted() {
+        // After O-O the rook lands on f1 and checks the king on f8.
+        for text in ["o-o+", "O-O+", "o-o"] {
+            let mut game = position("5k2/8/8/8/8/8/8/4K2R w K - 0 1");
+            assert!(
+                matches!(game.play("w", "White", text), ChessEvent::Moved { .. }),
+                "{text}"
+            );
+            assert!(game.board_fen().ends_with("5RK1 b - - 0 1"), "{text}");
         }
     }
 

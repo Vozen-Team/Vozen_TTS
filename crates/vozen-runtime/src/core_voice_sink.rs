@@ -370,10 +370,11 @@ impl GameRuntime {
             None,
             &BTreeMap::new(),
         )?;
-        self.send_content(context, &parent, content).await?;
+        // The notice is best-effort; the thread must be cleaned up even if it cannot be posted.
+        let posted = self.send_content(context, &parent, content).await;
         self.schedule_thread_delete(context, session.channel_id)
             .await;
-        Ok(())
+        posted
     }
 
     async fn dispatch_event(
@@ -410,24 +411,35 @@ impl GameRuntime {
                 .await?;
             }
             GameManagerEvent::Finished { session, actions } => {
-                self.send_actions(
-                    context,
-                    &session.guild_id,
-                    &session.channel_id,
-                    &session.locale,
-                    None,
-                    &actions,
-                    speech_allowed,
-                )
-                .await?;
+                // Save and release state first: a failed Discord post (deleted thread, lost
+                // permission) must neither lose the scores nor leak the engine and the thread.
                 let points = session
                     .scores
                     .iter()
                     .map(|score| (score.user_id.clone(), score.points))
                     .collect::<Vec<_>>();
-                if let Ok(store) = self.store.lock() {
-                    let _ = store.persist_game_scores(&session.guild_id, &points);
+                match self.store.lock() {
+                    Ok(store) => {
+                        if let Err(error) = store.persist_game_scores(&session.guild_id, &points) {
+                            eprintln!("[game] failed to persist scores: {error}");
+                        }
+                    }
+                    Err(_) => eprintln!("[game] failed to persist scores: store unavailable"),
                 }
+                if let Ok(mut engines) = self.session_engines.lock() {
+                    engines.remove(&session.guild_id);
+                }
+                let mut posted = self
+                    .send_actions(
+                        context,
+                        &session.guild_id,
+                        &session.channel_id,
+                        &session.locale,
+                        None,
+                        &actions,
+                        speech_allowed,
+                    )
+                    .await;
                 if game_uses_shared_standings(&session.game_id) {
                     let mut standings = Vec::with_capacity(session.scores.len());
                     for score in &session.scores {
@@ -445,16 +457,18 @@ impl GameRuntime {
                         });
                     }
                     let finish = render_game_finish(&standings);
-                    self.send_rendered_actions(
-                        context,
-                        &session.guild_id,
-                        &session.channel_id,
-                        &session.locale,
-                        None,
-                        &finish,
-                        speech_allowed,
-                    )
-                    .await?;
+                    let finished = self
+                        .send_rendered_actions(
+                            context,
+                            &session.guild_id,
+                            &session.channel_id,
+                            &session.locale,
+                            None,
+                            &finish,
+                            speech_allowed,
+                        )
+                        .await;
+                    posted = posted.and(finished);
                 }
                 if let Some(parent) = session.parent_channel_id {
                     let winner = session
@@ -471,22 +485,24 @@ impl GameRuntime {
                             Some(&session.locale),
                             None,
                             &parameters,
-                        )?
+                        )
                     } else {
                         self.render(
                             "game.thread.ended",
                             Some(&session.locale),
                             None,
                             &BTreeMap::new(),
-                        )?
+                        )
                     };
-                    self.send_content(context, &parent, content).await?;
+                    let announced = match content {
+                        Ok(content) => self.send_content(context, &parent, content).await,
+                        Err(error) => Err(error),
+                    };
+                    posted = posted.and(announced);
                     self.schedule_thread_delete(context, session.channel_id)
                         .await;
                 }
-                if let Ok(mut engines) = self.session_engines.lock() {
-                    engines.remove(&session.guild_id);
-                }
+                posted?;
             }
             GameManagerEvent::VoiceLeft => {
                 self.cleanup_forced(context, None).await?;
@@ -547,6 +563,23 @@ impl GameRuntime {
             .await
             .ok()
             .map(|channel| channel.id.get().to_string())
+    }
+
+    /// Undoes a registered game whose opening messages could not be posted, so no invisible game
+    /// keeps the guild busy, ticking and speaking.
+    async fn rollback_failed_start(
+        &self,
+        context: &Context,
+        guild_id: &str,
+        thread_id: Option<&str>,
+    ) {
+        end_registered_game(&self.coordinator, &self.session_engines, guild_id);
+        if let Some(thread_id) = thread_id
+            .and_then(|id| id.parse::<u64>().ok())
+            .filter(|id| *id != 0)
+        {
+            let _ = ChannelId::new(thread_id).delete(&context.http).await;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -691,16 +724,22 @@ impl GameRuntime {
             .map_err(|_| GatewayEventDispatchError)?
             .insert(guild_id.clone(), selected_engine);
         let speech_allowed = self.gateway_state.bot_voice_channel_id(&guild_id).is_some();
-        self.send_actions(
-            context,
-            &guild_id,
-            &game_channel_id,
-            &game_locale,
-            guild_locale.as_deref(),
-            &actions,
-            speech_allowed,
-        )
-        .await?;
+        if let Err(error) = self
+            .send_actions(
+                context,
+                &guild_id,
+                &game_channel_id,
+                &game_locale,
+                guild_locale.as_deref(),
+                &actions,
+                speech_allowed,
+            )
+            .await
+        {
+            self.rollback_failed_start(context, &guild_id, thread_id.as_deref())
+                .await;
+            return Err(error);
+        }
         if let Some(thread_id) = thread_id {
             let mut parameters = BTreeMap::new();
             parameters.insert("game", game_name);
@@ -1062,7 +1101,7 @@ impl GameRuntime {
                 .defer_ephemeral(context)
                 .await
                 .map_err(|_| GatewayEventDispatchError)?;
-            let content = self
+            let started = self
                 .start_game(
                     context,
                     guild_id,
@@ -1074,7 +1113,17 @@ impl GameRuntime {
                     play.language,
                     None,
                 )
-                .await?;
+                .await;
+            // A failed start was rolled back; the deferred reply must still say something.
+            let content = match started {
+                Ok(content) => content,
+                Err(_) => self.render(
+                    "error.generic",
+                    Some(&command.locale),
+                    command.guild_locale.as_deref(),
+                    &BTreeMap::new(),
+                )?,
+            };
             context
                 .http
                 .edit_original_interaction_response(
@@ -1466,7 +1515,9 @@ impl GameRuntime {
         let Some(game_id) = pick.selected_game else {
             return Ok(true);
         };
-        let content = self
+        let reply_locale = pick.locale.clone();
+        let reply_guild_locale = pick.guild_locale.clone();
+        let started = self
             .start_game(
                 context,
                 pick.guild_id,
@@ -1478,7 +1529,17 @@ impl GameRuntime {
                 pick.language,
                 Some(pick.engine),
             )
-            .await?;
+            .await;
+        // A failed start was rolled back; replace the picker instead of leaving it to time out.
+        let content = match started {
+            Ok(content) => content,
+            Err(_) => self.render(
+                "error.generic",
+                Some(&reply_locale),
+                reply_guild_locale.as_deref(),
+                &BTreeMap::new(),
+            )?,
+        };
         context
             .http
             .edit_original_interaction_response(
@@ -4423,9 +4484,61 @@ fn queue_lane_label(lane: QueueLane) -> &'static str {
     }
 }
 
+/// Forgets a game that was registered with the coordinator but never announced.
+fn end_registered_game(
+    coordinator: &Mutex<GameCoordinator>,
+    session_engines: &Mutex<BTreeMap<String, SynthesisEngine>>,
+    guild_id: &str,
+) {
+    if let Ok(mut coordinator) = coordinator.lock() {
+        coordinator.end_guild(guild_id);
+    }
+    if let Ok(mut engines) = session_engines.lock() {
+        engines.remove(guild_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_whose_start_could_not_be_announced_is_fully_forgotten() {
+        let coordinator = Mutex::new(GameCoordinator::new(GameDriverFactory::new(
+            vec!["en_US-amy-medium".into()],
+            "en_US-amy-medium",
+            "en",
+        )));
+        let started = coordinator
+            .lock()
+            .unwrap()
+            .start(vozen_discord::GamePlayRequest {
+                guild_id: Some("guild".into()),
+                parent_channel_id: "parent".into(),
+                game_channel_id: "thread".into(),
+                starter_id: "starter".into(),
+                game_id: Some("math".into()),
+                language: None,
+                locale: "en".into(),
+                bot_voice_channel_id: Some("voice".into()),
+                user_premium: false,
+                guild_premium: false,
+                seed: 7,
+                now_ms: 100,
+            })
+            .expect("start");
+        assert!(matches!(
+            started,
+            vozen_discord::GameStartOutcome::Started { .. }
+        ));
+        let engines = Mutex::new(BTreeMap::from([(
+            "guild".to_owned(),
+            SynthesisEngine::Default,
+        )]));
+        end_registered_game(&coordinator, &engines, "guild");
+        assert!(!coordinator.lock().unwrap().active("guild"));
+        assert!(engines.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn randomizer_modal_acknowledges_without_editing_a_missing_source_message() {
