@@ -316,6 +316,37 @@ struct CheckoutInput {
     interval: String,
 }
 
+/// Reuses the user's Stripe customer and refuses a second live subscription to the same plan
+/// (seats do not stack across subscriptions, so it would only charge twice). Other plans stay
+/// purchasable; interval changes go through the plan-change routes.
+fn checkout_customer(
+    state: &StripeState,
+    user_id: &str,
+    plan: &str,
+) -> Result<Option<String>, SubscriptionExists> {
+    let Ok(store) = state.store.lock() else {
+        return Ok(None);
+    };
+    if store
+        .has_live_stripe_subscription(user_id, plan, (state.now)())
+        .unwrap_or(false)
+    {
+        return Err(SubscriptionExists);
+    }
+    Ok(store.stripe_customer_for_user(user_id).ok().flatten())
+}
+
+/// The user already pays for the requested plan; manage it in the billing portal instead.
+struct SubscriptionExists;
+
+fn subscription_exists(state: &StripeState) -> Response {
+    json_response(
+        StatusCode::CONFLICT,
+        json!({"error":"subscription_exists"}),
+        state,
+    )
+}
+
 #[derive(Deserialize)]
 struct CheckoutStatusInput {
     session_id: String,
@@ -345,6 +376,10 @@ async fn checkout(
     let Some((price, seats)) = state.prices.get(&input.plan, &input.interval) else {
         return cors(StatusCode::BAD_REQUEST, "unsupported plan", &state);
     };
+    let customer = match checkout_customer(&state, &user.id, &input.plan) {
+        Ok(customer) => customer,
+        Err(SubscriptionExists) => return subscription_exists(&state),
+    };
     let origin = state
         .origin
         .to_str()
@@ -352,7 +387,7 @@ async fn checkout(
         .trim_end_matches('/');
     let success_url = format!("{origin}/account?checkout=success");
     let cancel_url = format!("{origin}/#premium");
-    let form = [
+    let mut form = vec![
         ("mode", "subscription".to_owned()),
         ("line_items[0][price]", price.to_owned()),
         ("line_items[0][quantity]", "1".to_owned()),
@@ -374,6 +409,9 @@ async fn checkout(
         ("cancel_url", cancel_url),
         ("allow_promotion_codes", "true".to_owned()),
     ];
+    if let Some(customer) = customer {
+        form.push(("customer", customer));
+    }
     let response = state
         .client
         .post(format!("{STRIPE_API}/checkout/sessions"))
@@ -464,7 +502,11 @@ async fn checkout_elements(
     let Some((price, seats)) = state.prices.get(&input.plan, &input.interval) else {
         return cors(StatusCode::BAD_REQUEST, "unsupported plan", &state);
     };
-    let form = [
+    let customer = match checkout_customer(&state, &user.id, &input.plan) {
+        Ok(customer) => customer,
+        Err(SubscriptionExists) => return subscription_exists(&state),
+    };
+    let mut form = vec![
         ("mode", "subscription".to_owned()),
         ("line_items[0][price]", price.to_owned()),
         ("line_items[0][quantity]", "1".to_owned()),
@@ -485,6 +527,9 @@ async fn checkout_elements(
         ("redirect_on_completion", "never".to_owned()),
         ("allow_promotion_codes", "true".to_owned()),
     ];
+    if let Some(customer) = customer {
+        form.push(("customer", customer));
+    }
     match state
         .client
         .post(format!("{STRIPE_API}/checkout/sessions"))
@@ -1120,11 +1165,11 @@ fn stripe_event_input(event_type: &str, object: &Value) -> Result<StripeEventInp
                             .and_then(Value::as_i64)
                     })
                     .and_then(stripe_period_end_ms),
+                // Never assume `active`: a missing status keeps the stored one.
                 status: object
                     .get("status")
                     .and_then(Value::as_str)
-                    .unwrap_or("active")
-                    .into(),
+                    .map(str::to_owned),
             })
         }
         "invoice.payment_failed" => Ok(StripeEventInput::InvoiceFailed {
