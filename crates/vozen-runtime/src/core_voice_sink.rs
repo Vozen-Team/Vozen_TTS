@@ -2527,17 +2527,17 @@ impl CoreVoiceGatewaySink {
         };
         let guild_id = guild_id.get().to_string();
         let user_id = component.user.id.get().to_string();
-        let response = {
+        let response = 'session: {
             let mut sessions = self
                 .randomizer_sessions
                 .lock()
                 .map_err(|_| GatewayEventDispatchError)?;
             let Some(session) = sessions.get_mut(&session_id) else {
-                return Ok(true);
+                break 'session retired_panel_response();
             };
             if !Self::randomizer_session_matches(session, &user_id, &guild_id, now_ms) {
                 sessions.remove(&session_id);
-                return Ok(true);
+                break 'session retired_panel_response();
             }
             session.amount = Some(amount);
             self.randomizer_modal(
@@ -3323,23 +3323,33 @@ impl CoreVoiceGatewaySink {
         let guild_id = guild_id.get().to_string();
         let user_id = component.user.id.get().to_string();
         let channel_id = component.channel_id.get().to_string();
-        let mut session = {
+        let session = {
             let mut sessions = self
                 .cast_sessions
                 .lock()
                 .map_err(|_| GatewayEventDispatchError)?;
-            let Some(session) = sessions.get(&session_id) else {
-                return Ok(true);
-            };
-            if session.user_id != user_id
-                || session.guild_id != guild_id
-                || session.channel_id != channel_id
-                || !session.valid_at(system_now_ms())
-            {
-                sessions.remove(&session_id);
-                return Ok(true);
+            match sessions.get(&session_id) {
+                Some(session)
+                    if session.user_id == user_id
+                        && session.guild_id == guild_id
+                        && session.channel_id == channel_id
+                        && session.valid_at(system_now_ms()) =>
+                {
+                    Some(session.clone())
+                }
+                Some(_) => {
+                    sessions.remove(&session_id);
+                    None
+                }
+                None => None,
             }
-            session.clone()
+        };
+        let Some(mut session) = session else {
+            component
+                .create_response(context, retired_panel_response())
+                .await
+                .map_err(|_| GatewayEventDispatchError)?;
+            return Ok(true);
         };
 
         let selected = match &component.data.kind {
@@ -4154,7 +4164,7 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
         }
         let http = &context.http;
         let guild_id = command.guild_id;
-        let response = executor
+        let executed = executor
             .execute(
                 &command.data,
                 &facts,
@@ -4180,8 +4190,25 @@ impl GatewayEventSink for CoreVoiceGatewaySink {
                     )
                 },
             )
-            .await
-            .map_err(|_| GatewayEventDispatchError)?;
+            .await;
+        let response = match executed {
+            Ok(response) => response,
+            Err(_) => {
+                // A deferred reply must never stay on "thinking…" for its 15-minute lifetime.
+                if (defer_ephemeral || defer_public)
+                    && let Ok(content) =
+                        executor.render_key("error.generic", &facts, Some(&command.locale))
+                {
+                    let _ = command
+                        .edit_response(
+                            &context,
+                            EditInteractionResponse::new().embeds(vec![danger_embed(content)]),
+                        )
+                        .await;
+                }
+                return Err(GatewayEventDispatchError);
+            }
+        };
         let CoreVoiceInteractionExecution::Reply { content, .. } = response else {
             return Ok(());
         };
@@ -4482,6 +4509,14 @@ fn queue_lane_label(lane: QueueLane) -> &'static str {
         QueueLane::Standard => "standard",
         QueueLane::Accessibility => "accessibility",
     }
+}
+
+/// The panel's session is gone (expired, evicted or lost in a restart). Remove its dead controls
+/// instead of letting Discord report a failed interaction; the message text stays as it was.
+fn retired_panel_response() -> CreateInteractionResponse {
+    CreateInteractionResponse::UpdateMessage(
+        CreateInteractionResponseMessage::new().components(Vec::new()),
+    )
 }
 
 /// Forgets a game that was registered with the coordinator but never announced.

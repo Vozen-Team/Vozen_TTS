@@ -235,7 +235,21 @@ impl GatewayEventSink for TtsFileGatewaySink {
                 .map_err(|_| GatewayEventDispatchError)?;
             return Ok(());
         };
-        let workspace = PrivateExportWorkspace::new().map_err(|_| GatewayEventDispatchError)?;
+        let Ok(workspace) = PrivateExportWorkspace::new() else {
+            // The reply is already deferred; answer instead of leaving it on "thinking…".
+            drop(permit);
+            let failed = self.message(
+                "ttsFile.failed",
+                &command.locale,
+                guild_locale,
+                &BTreeMap::new(),
+            )?;
+            command
+                .edit_response(&context, EditInteractionResponse::new().content(failed))
+                .await
+                .map_err(|_| GatewayEventDispatchError)?;
+            return Ok(());
+        };
         // Each request gets a separate cache namespace, so identical concurrent exports
         // cannot delete or reuse another request's audio. The shared semaphore bounds Piper.
         let synthesizer =
@@ -264,7 +278,10 @@ impl GatewayEventSink for TtsFileGatewaySink {
                             guild_locale,
                             &BTreeMap::new(),
                         )?;
-                        workspace.close().map_err(|_| GatewayEventDispatchError)?;
+                        // A cleanup failure must not stop the user from hearing about it.
+                        if workspace.close().is_err() {
+                            eprintln!("[tts-file] failed to remove a private export workspace");
+                        }
                         drop(permit);
                         command
                             .edit_response(&context, EditInteractionResponse::new().content(failed))

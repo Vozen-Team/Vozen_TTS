@@ -114,7 +114,7 @@ plan was vetted by reading the cited code at that commit.
 | 021  | Make Kokoro and neural multi-segment audio work and cache correctly             | P1       | M      | —          | DONE (602ec03) |
 | 022  | Stop spoken spoilers, URLs and invisible-character blocklist bypasses           | P1       | S      | —          | DONE (87b99e6) |
 | 023  | Honour the accessibility priority lane in Songbird playback                     | P2       | M      | —          | DONE (8345cfa) |
-| 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | TODO           |
+| 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | DONE (47e562e) |
 | 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | TODO           |
 | 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | TODO           |
 | 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | TODO           |

@@ -440,8 +440,9 @@ pub struct SetupGatewaySink {
     store: Arc<Mutex<SqliteStore>>,
     gateway: GatewayState,
     sessions: Mutex<BTreeMap<String, PendingSetup>>,
-    // Serialize lookup/create/confirm so concurrent clicks cannot create duplicate channels.
-    actions: tokio::sync::Mutex<()>,
+    // Serialize lookup/create/confirm per guild so concurrent clicks cannot create duplicate
+    // channels, without one slow guild holding up every other guild's setup.
+    actions: Mutex<HashMap<u64, Arc<tokio::sync::Mutex<()>>>>,
     #[cfg(feature = "voice-driver")]
     voice: Option<Arc<crate::core_voice_sink::CoreVoiceGatewaySink>>,
 }
@@ -457,7 +458,7 @@ impl SetupGatewaySink {
             store,
             gateway,
             sessions: Mutex::new(BTreeMap::new()),
-            actions: tokio::sync::Mutex::new(()),
+            actions: Mutex::new(HashMap::new()),
             #[cfg(feature = "voice-driver")]
             voice: None,
         })
@@ -581,13 +582,34 @@ impl SetupGatewaySink {
         Ok((nonce, session))
     }
 
+    fn guild_action_lock(&self, guild_id: u64) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .actions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        locks.entry(guild_id).or_default().clone()
+    }
+
+    /// Whether this is a Confirm click whose session already saved the settings.
+    fn session_confirmed(&self, custom_id: &str) -> bool {
+        let Some((nonce, "confirm")) = action_id(custom_id) else {
+            return false;
+        };
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(nonce).map(|session| session.confirmed))
+            .unwrap_or(false)
+    }
+
     async fn apply_action(
         &self,
         context: &Context,
         component: &serenity::model::application::ComponentInteraction,
     ) -> Result<EditInteractionResponse, String> {
         let text = |key| self.text(&component.locale, key);
-        let _guard = self.actions.lock().await;
+        let guild_lock = self.guild_action_lock(component.guild_id.map_or(0, GuildId::get));
+        let _guard = guild_lock.lock().await;
         let (nonce, action) =
             action_id(&component.data.custom_id).ok_or_else(|| text("wizard.reopen"))?;
         if !matches!(action, "channel" | "category")
@@ -1021,6 +1043,11 @@ impl GatewayEventSink for SetupGatewaySink {
                     error => {
                         let text = match error {
                             Ok(Err(text)) => text,
+                            // A timeout after Confirm already saved the settings is a success
+                            // for the admin; asking them to start over would be wrong.
+                            Err(_) if self.session_confirmed(&c.data.custom_id) => {
+                                self.text(&c.locale, "setup.done")
+                            }
                             _ => self.text(&c.locale, "wizard.reopen"),
                         };
                         if is_setup_check(&c.data.custom_id) {
@@ -1431,6 +1458,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn setup_clicks_are_serialised_per_guild_only() {
+        let sink = SetupGatewaySink::new(
+            Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap())),
+            GatewayState::default(),
+        )
+        .unwrap();
+        let first = sink.guild_action_lock(7);
+        assert!(Arc::ptr_eq(&first, &sink.guild_action_lock(7)));
+        let other = sink.guild_action_lock(8);
+        assert!(!Arc::ptr_eq(&first, &other));
+        let _held = first.try_lock().expect("guild 7 lock");
+        assert!(
+            other.try_lock().is_ok(),
+            "guild 8 must not wait for guild 7"
+        );
+    }
+
+    #[test]
+    fn only_a_saved_confirm_counts_as_done_after_a_timeout() {
+        let sink = SetupGatewaySink::new(
+            Arc::new(Mutex::new(SqliteStore::open_in_memory().unwrap())),
+            GatewayState::default(),
+        )
+        .unwrap();
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let mut session = PendingSetup::new(7, 42, 100);
+        sink.sessions
+            .lock()
+            .unwrap()
+            .insert(nonce.into(), session.clone());
+        let confirm = format!("{PREFIX}{nonce}:confirm");
+        assert!(!sink.session_confirmed(&confirm));
+        session.confirmed = true;
+        sink.sessions.lock().unwrap().insert(nonce.into(), session);
+        assert!(sink.session_confirmed(&confirm));
+        assert!(!sink.session_confirmed(&format!("{PREFIX}{nonce}:test")));
     }
 
     #[test]
