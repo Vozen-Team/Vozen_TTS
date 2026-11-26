@@ -185,7 +185,16 @@ impl DiscordOAuthVerifier {
         }
 
         let identity = self.resolve_claim_identity_uncached(bearer).await;
-        self.cache_put(cache_key, identity.clone().ok(), now);
+        match &identity {
+            Ok(found) => self.cache_put(cache_key, Some(found.clone()), now),
+            // A temporary Discord failure (429, 5xx, network) says nothing about the token.
+            // Caching it would turn one hiccup into a minute of "invalid token" answers.
+            Err(
+                IdentityResolutionError::OAuthUnavailable
+                | IdentityResolutionError::UserUnavailable,
+            ) => self.cache_remove(cache_key),
+            Err(_) => self.cache_put(cache_key, None, now),
+        }
         identity
     }
 
@@ -281,6 +290,12 @@ impl DiscordOAuthVerifier {
         };
         cache.retain(|_, item| item.expires_at > now);
         cache.get(&cache_key).map(|item| item.identity.clone())
+    }
+
+    fn cache_remove(&self, cache_key: [u8; 32]) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(&cache_key);
+        }
     }
 
     fn cache_put(&self, cache_key: [u8; 32], identity: Option<DiscordIdentity>, now: i64) {
@@ -646,6 +661,46 @@ mod tests {
         assert_eq!(http.calls.lock().unwrap().as_slice(), [DISCORD_OAUTH_ME]);
         let cache = verifier.cache.lock().unwrap();
         assert!(cache.contains_key(&token_cache_key("sensitive-token")));
+    }
+
+    #[tokio::test]
+    async fn temporary_discord_failures_are_not_cached_as_invalid_tokens() {
+        for (oauth_result, user_result) in [
+            (
+                Err(DiscordHttpError::Unavailable),
+                Ok(user("user-a", None, false)),
+            ),
+            (
+                Ok(oauth("vozen-client", "user-a", &["identify"])),
+                Err(DiscordHttpError::Unavailable),
+            ),
+        ] {
+            let http = Arc::new(FakeHttp {
+                calls: Mutex::new(Vec::new()),
+                oauth: oauth_result,
+                user: user_result,
+                bot_user: Err(DiscordHttpError::Unavailable),
+            });
+            let verifier = verifier(http.clone());
+            assert!(verifier.resolve_identity("sensitive-token").await.is_err());
+            assert!(verifier.resolve_identity("sensitive-token").await.is_err());
+            // Both attempts reached Discord: the outage was retried, not served from the cache.
+            let oauth_calls = http
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|url| url.as_str() == DISCORD_OAUTH_ME)
+                .count();
+            assert_eq!(oauth_calls, 2);
+            assert!(
+                !verifier
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .contains_key(&token_cache_key("sensitive-token"))
+            );
+        }
     }
 
     #[tokio::test]

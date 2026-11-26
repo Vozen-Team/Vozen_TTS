@@ -116,7 +116,7 @@ plan was vetted by reading the cited code at that commit.
 | 023  | Honour the accessibility priority lane in Songbird playback                     | P2       | M      | —          | DONE (8345cfa) |
 | 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | DONE (47e562e) |
 | 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | DONE (c75989d) |
-| 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | TODO           |
+| 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | DONE (7808d49) |
 | 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | TODO           |
 | 028  | Make shut-up, skip and pause race-free and keep paired speech together          | P3       | M      | 021, 023   | TODO           |
 | 029  | Fix outbox timestamp units, oversized batches and stale replica triggers        | P3       | S      | —          | TODO           |
