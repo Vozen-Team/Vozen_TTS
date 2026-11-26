@@ -287,7 +287,14 @@ impl<R: PiperRunner> PiperEngine<R> {
         // matching the legacy MultiSegmentEngine's never-drop-content rule.
         match self.synth_segments(request, segments).await {
             Ok(path) => Ok(path),
-            Err(_) => self.synth_single(request).await,
+            Err(_) => {
+                // Cache the base-voice fallback under its own single-voice key. Writing it under
+                // the multi-voice key would turn one transient segment failure into a permanent
+                // wrong-voice cache hit.
+                let mut base = request.clone();
+                base.segments = None;
+                self.synth_single(&base).await
+            }
         }
     }
 
@@ -365,16 +372,24 @@ impl<R: PiperRunner> PiperEngine<R> {
             .runner
             .run(&model, &temporary, &request.text, request.speed)
             .await;
-        if result.is_ok() && !non_empty_file(&temporary).await? {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(TtsError::EmptyOutput);
+        let prepared = async {
+            result?;
+            if !non_empty_file(&temporary).await? {
+                return Err(TtsError::EmptyOutput);
+            }
+            if request.lead_silence_ms > 0 {
+                let wav = tokio::fs::read(&temporary).await?;
+                let prefixed =
+                    prepend_silence_wav(&wav, request.lead_silence_ms).map_err(TtsError::Wav)?;
+                tokio::fs::write(&temporary, prefixed).await?;
+            }
+            Ok::<(), TtsError>(())
         }
-        result?;
-        if request.lead_silence_ms > 0 {
-            let wav = tokio::fs::read(&temporary).await?;
-            let prefixed =
-                prepend_silence_wav(&wav, request.lead_silence_ms).map_err(TtsError::Wav)?;
-            tokio::fs::write(&temporary, prefixed).await?;
+        .await;
+        // The temporary is a dot-file that eviction skips, so every failure must remove it here.
+        if let Err(error) = prepared {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
         }
         // A simultaneous matching request can win the race. Its immutable cache result is valid.
         match tokio::fs::rename(&temporary, &destination).await {
@@ -504,7 +519,15 @@ fn cache_key(request: &SynthRequest) -> String {
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    match &request.segments {
+    hash_segments(&mut digest, request.segments.as_deref());
+    digest.update(request.lead_silence_ms.to_be_bytes());
+    format!("{:x}", digest.finalize())
+}
+
+/// Keeps single-voice and multi-voice renderings of the same joined text in separate cache
+/// files. Every provider's cache key must include it.
+pub(crate) fn hash_segments(digest: &mut Sha256, segments: Option<&[vozen_core::SpeechSegment]>) {
+    match segments {
         Some(segments) => {
             digest.update([1]);
             digest.update((segments.len() as u64).to_be_bytes());
@@ -517,8 +540,6 @@ fn cache_key(request: &SynthRequest) -> String {
         }
         None => digest.update([0]),
     }
-    digest.update(request.lead_silence_ms.to_be_bytes());
-    format!("{:x}", digest.finalize())
 }
 
 /// Piper's `length_scale` runs inversely to the user-facing speed. Clamp avoids a malformed
@@ -740,6 +761,91 @@ mod tests {
         // The valid segment may already be in flight when the missing model fails; the caller
         // still falls back to the resolved base voice without dropping the original text.
         assert_eq!(runner.calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn segment_fallback_is_cached_apart_so_a_transient_failure_does_not_stick() {
+        let root = temp_dir("segment-fallback-key");
+        let models = root.join("models");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("base model");
+        let runner = Arc::new(FakeRunner {
+            calls: AtomicUsize::new(0),
+            bytes: wav_concat::silence_wav(1),
+        });
+        let engine = PiperEngine::new(runner.clone(), &models, root.join("cache"), 1);
+        let mut segmented = request();
+        segmented.text = "olá hello".into();
+        segmented.segments = Some(vec![
+            vozen_core::SpeechSegment {
+                text: "olá".into(),
+                model: "pt_PT-tugao-medium".into(),
+            },
+            vozen_core::SpeechSegment {
+                text: "hello".into(),
+                model: "en_US-amy-medium".into(),
+            },
+        ]);
+        let mut base = segmented.clone();
+        base.segments = None;
+
+        let fallback = engine.synth(&segmented).await.expect("fallback");
+        assert_eq!(
+            fallback.file_name().and_then(|name| name.to_str()),
+            Some(format!("{}.wav", cache_key(&base)).as_str())
+        );
+
+        // Once the missing voice is available, the multi-voice rendering is produced instead of
+        // the earlier fallback being served from the cache.
+        tokio::fs::write(models.join("pt_PT-tugao-medium.onnx"), b"model")
+            .await
+            .expect("segment model");
+        let recovered = engine.synth(&segmented).await.expect("multi-voice");
+        assert_eq!(
+            recovered.file_name().and_then(|name| name.to_str()),
+            Some(format!("{}.wav", cache_key(&segmented)).as_str())
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    struct FailingRunner;
+
+    #[async_trait]
+    impl PiperRunner for FailingRunner {
+        async fn run(
+            &self,
+            _model: &Path,
+            output: &Path,
+            _text: &str,
+            _speed: f64,
+        ) -> Result<(), TtsError> {
+            // Piper may already have written part of its output before it fails or times out.
+            tokio::fs::write(output, b"RIFF partial").await?;
+            Err(TtsError::ProcessFailed)
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_synthesis_leaves_no_temporary_files_behind() {
+        let root = temp_dir("temporary-cleanup");
+        let models = root.join("models");
+        let cache = root.join("cache");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("model");
+        let engine = PiperEngine::new(Arc::new(FailingRunner), &models, &cache, 1);
+        assert!(engine.synth(&request()).await.is_err());
+        let mut entries = tokio::fs::read_dir(&cache).await.expect("cache dir");
+        let leftover = entries.next_entry().await.expect("entry");
+        assert!(
+            leftover.is_none(),
+            "unexpected leftover file {:?}",
+            leftover.map(|entry| entry.file_name())
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
