@@ -112,7 +112,7 @@ plan was vetted by reading the cited code at that commit.
 | 019  | Grant 24 hours of Plus per vote and stop phantom ledger backfill                | P1       | S      | —          | DONE (cc94be4) |
 | 020  | Make giveaway entries match the published rules and keep draws alive            | P1       | M      | 019        | DONE (0d55915) |
 | 021  | Make Kokoro and neural multi-segment audio work and cache correctly             | P1       | M      | —          | DONE (602ec03) |
-| 022  | Stop spoken spoilers, URLs and invisible-character blocklist bypasses           | P1       | S      | —          | TODO           |
+| 022  | Stop spoken spoilers, URLs and invisible-character blocklist bypasses           | P1       | S      | —          | DONE (87b99e6) |
 | 023  | Honour the accessibility priority lane in Songbird playback                     | P2       | M      | —          | TODO           |
 | 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | TODO           |
 | 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | TODO           |

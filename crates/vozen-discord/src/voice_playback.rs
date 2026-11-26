@@ -462,6 +462,75 @@ impl SongbirdCommandPlayback {
         ledger.remember(guild_id, id, metadata);
         Ok(())
     }
+
+    /// Moves a just-enqueued priority-role track ahead of waiting standard speech. The audible
+    /// track is never interrupted, and the burst rule still lets standard speech through.
+    #[cfg(feature = "voice-driver")]
+    fn prioritise_accessible_track(&self, guild_id: &str, id: Uuid, handler: &songbird::Call) {
+        // Copy the lanes first so the ledger lock is never held inside Songbird's queue lock.
+        let lanes: BTreeMap<Uuid, QueueLane> = match self.queue_metadata.lock() {
+            Ok(ledger) => ledger
+                .by_guild
+                .get(guild_id)
+                .map(|tracks| {
+                    tracks
+                        .iter()
+                        .map(|(track, metadata)| (*track, metadata.lane))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => return,
+        };
+        songbird_driver(handler).queue().modify_queue(|queued| {
+            let len = queued.len();
+            if len <= 2 || queued.back().map(|track| track.uuid()) != Some(id) {
+                return;
+            }
+            let mut pending = Vec::with_capacity(len - 2);
+            for track in queued.range(1..len - 1) {
+                // Unknown tracks (e.g. sound effects) keep the original order untouched.
+                let Some(lane) = lanes.get(&track.uuid()) else {
+                    return;
+                };
+                pending.push(*lane);
+            }
+            let target = 1 + accessibility_insert_index(&pending);
+            if target < len - 1
+                && let Some(track) = queued.pop_back()
+            {
+                queued.insert(target, track);
+            }
+        });
+    }
+}
+
+/// Where a new priority-role item goes among the pending tracks (those after the audible one):
+/// behind earlier priority items, but never as the fourth priority item in a row while a
+/// standard item is waiting (`MAX_ACCESSIBILITY_BURST`).
+#[cfg(any(feature = "voice-driver", test))]
+fn accessibility_insert_index(pending: &[QueueLane]) -> usize {
+    let burst = usize::from(vozen_core::MAX_ACCESSIBILITY_BURST);
+    let mut index = pending
+        .iter()
+        .rposition(|lane| *lane == QueueLane::Accessibility)
+        .map_or(0, |last| last + 1);
+    loop {
+        let run = pending[..index]
+            .iter()
+            .rev()
+            .take_while(|lane| **lane == QueueLane::Accessibility)
+            .count();
+        if run < burst || index >= pending.len() {
+            return index;
+        }
+        match pending[index..]
+            .iter()
+            .position(|lane| *lane == QueueLane::Standard)
+        {
+            Some(offset) => index += offset + 1,
+            None => return pending.len(),
+        }
+    }
 }
 
 #[cfg(feature = "voice-driver")]
@@ -582,6 +651,9 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
             );
         }
         let handle = songbird_driver_mut(&mut handler).enqueue(track).await;
+        if options.lane == QueueLane::Accessibility {
+            self.prioritise_accessible_track(guild_id, id, &handler);
+        }
         drop(handler);
 
         match tokio::time::timeout(
@@ -928,6 +1000,19 @@ pub async fn leave_voice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn priority_speech_goes_ahead_of_standard_speech_within_the_burst_limit() {
+        use QueueLane::{Accessibility as A, Standard as S};
+        assert_eq!(accessibility_insert_index(&[]), 0);
+        assert_eq!(accessibility_insert_index(&[S, S]), 0);
+        assert_eq!(accessibility_insert_index(&[A, S]), 1);
+        assert_eq!(accessibility_insert_index(&[A, A, S, S]), 2);
+        // Three priority items already lead: one waiting standard item plays before the fourth.
+        assert_eq!(accessibility_insert_index(&[A, A, A, S]), 4);
+        assert_eq!(accessibility_insert_index(&[A, A, A]), 3);
+        assert_eq!(accessibility_insert_index(&[A, A, A, S, S]), 4);
+    }
 
     #[cfg(feature = "voice-driver")]
     #[test]
