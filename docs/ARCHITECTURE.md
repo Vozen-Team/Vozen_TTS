@@ -13,11 +13,12 @@ website. The former TypeScript runtime is preserved only on the
 - `vozen-core`: pure text cleaning, language detection, policies, games,
   translation and shared business rules.
 - `vozen-store`: SQLite schema/migrations, user/guild settings, telemetry,
-  privacy erasure, Premium passes and vote/Ko-fi ledgers.
+  privacy erasure, Premium passes, vote ledgers and the read-only legacy Ko-fi
+  tables (retention and privacy erasure only).
 - `vozen-tts`: Piper, Google/gTTS, Kokoro and neural adapters with bounded
   caching and fail-closed paid-engine selection.
-- `vozen-api`: dashboard, Discord OAuth, Premium status/claims, Top.gg and
-  Ko-fi webhooks, public health/status routes.
+- `vozen-api`: dashboard, Discord OAuth, Premium status, Stripe billing, admin,
+  Top.gg webhooks, public health/status routes.
 
 ## Compatibility boundaries
 
@@ -27,7 +28,9 @@ loading application source. `tools/check-rust-canaries.mjs` validates the full
 runtime flag set against `.env.rust.staging.example`.
 
 The runtime keeps the existing environment variable names and HTTP paths so
-Top.gg, Ko-fi, OAuth, Premium and the `vozen.org` dashboard remain compatible.
+Top.gg, Stripe, OAuth, Premium and the `vozen.org` dashboard remain compatible.
+Ko-fi was retired: its webhook and claim routes no longer exist, and passes it
+granted keep working until they expire.
 SQLite opens existing `tts.db` files through migrations and never rewrites or
 deletes production data during a normal deploy.
 
