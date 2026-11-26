@@ -120,7 +120,7 @@ plan was vetted by reading the cited code at that commit.
 | 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | DONE (c4d5b9a)                                           |
 | 028  | Make shut-up, skip and pause race-free and keep paired speech together          | P3       | M      | 021, 023   | DONE (1d64659; 120 s eviction guard dropped, see commit) |
 | 029  | Fix outbox timestamp units, oversized batches and stale replica triggers        | P3       | S      | —          | DONE (44b0f53)                                           |
-| 030  | Prevent duplicate Stripe subscriptions, stale statuses and partial Ko-fi orders | P3       | M      | —          | TODO                                                     |
+| 030  | Prevent duplicate Stripe subscriptions, stale statuses and partial Ko-fi orders | P3       | M      | —          | DONE (ad5b206; Ko-fi step dropped: Ko-fi no longer used) |
 
 Status values: TODO | IN PROGRESS | DONE (commit) | BLOCKED (reason) | REJECTED (reason)
 
