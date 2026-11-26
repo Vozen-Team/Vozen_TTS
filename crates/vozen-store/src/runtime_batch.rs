@@ -166,6 +166,45 @@ impl RuntimeBatchEvent {
     pub fn payload(&self) -> &str {
         &self.payload
     }
+
+    /// Splits the batch until every payload fits `max_bytes`, so a backlog larger than the
+    /// outbox limit is delivered in parts instead of being rejected and restored forever. A
+    /// single row that still does not fit is returned on its own for the caller to drop.
+    #[must_use]
+    pub fn split(self, max_bytes: usize) -> Vec<Self> {
+        if self.payload.len() <= max_bytes
+            || self.pending.metrics.len() + self.pending.speech.len() <= 1
+        {
+            return vec![self];
+        }
+        let (left, right) = self.pending.halve();
+        [left, right]
+            .into_iter()
+            .filter_map(|pending| {
+                let payload = encode(&pending)?;
+                Some(Self { payload, pending })
+            })
+            .flat_map(|part| part.split(max_bytes))
+            .collect()
+    }
+}
+
+impl PendingBatch {
+    /// Moves the last half of the rows into a second batch; counters are never split.
+    fn halve(mut self) -> (Self, Self) {
+        let total = self.metrics.len() + self.speech.len();
+        let mut right = Self::default();
+        while right.metrics.len() + right.speech.len() < total - total / 2 {
+            if let Some((key, value)) = self.speech.pop_last() {
+                right.speech.insert(key, value);
+            } else if let Some((key, value)) = self.metrics.pop_last() {
+                right.metrics.insert(key, value);
+            } else {
+                break;
+            }
+        }
+        (self, right)
+    }
 }
 
 fn encode(pending: &PendingBatch) -> Option<String> {
@@ -211,6 +250,32 @@ fn engine_name(engine: UserEngine) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_oversized_drain_splits_into_parts_that_fit_and_keep_every_count() {
+        let buffer = RuntimeBatchBuffer::enabled();
+        for index in 0..200 {
+            buffer.record_accepted_speech(
+                "2026-11-25",
+                &format!("guild-{index}"),
+                &format!("user-{index}"),
+                "pt_PT-voice",
+                UserEngine::Piper,
+            );
+        }
+        let batch = buffer.drain().expect("batch");
+        let limit = batch.payload().len() / 5;
+        let parts = batch.split(limit);
+        assert!(parts.len() >= 5);
+        let mut rows = 0;
+        for part in &parts {
+            assert!(part.payload().len() <= limit, "{}", part.payload().len());
+            let payload: serde_json::Value =
+                serde_json::from_str(part.payload()).expect("valid JSON");
+            rows += payload["speech"].as_array().expect("speech rows").len();
+        }
+        assert_eq!(rows, 200);
+    }
 
     #[test]
     fn coalesces_events_and_restores_a_failed_drain() {

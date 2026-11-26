@@ -8,7 +8,8 @@ use rusqlite::{Connection, params};
 use crate::{SqliteStore, StoreError};
 
 const MAX_BATCH_ID_LEN: usize = 128;
-const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+/// Largest payload a single outbox row may carry.
+pub const MAX_RUNTIME_OUTBOX_PAYLOAD_BYTES: usize = 256 * 1024;
 // These values feed the in-memory voice cache and are changed comparatively rarely. Hot counters
 // deliberately stay out of trigger capture: they are aggregated by `RuntimeBatchBuffer` and sent
 // in five-second batches instead of adding one durable outbox row per spoken message.
@@ -33,6 +34,7 @@ const POSTGRES_REPLICA_TABLES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeOutboxEnqueue<'a> {
     pub batch_id: &'a str,
+    /// Unix time in milliseconds, the same unit replica triggers write.
     pub created_at: i64,
     /// Serialized JSON payload. Keeping it opaque prevents the fallback from becoming a second
     /// query model; the Postgres worker owns interpretation and idempotency.
@@ -42,6 +44,7 @@ pub struct RuntimeOutboxEnqueue<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeOutboxBatch {
     pub batch_id: String,
+    /// Unix time in milliseconds, the same unit replica triggers write.
     pub created_at: i64,
     pub payload: String,
 }
@@ -100,8 +103,13 @@ pub(crate) fn install_replica_triggers(
             ("ad", "AFTER DELETE", "OLD", "delete"),
         ] {
             let payload = replica_payload(table, &columns, row_ref, operation);
+            let trigger = quote_identifier(&format!("{trigger_prefix}_{suffix}"));
+            // Recreate rather than keep an existing trigger: its payload lists the columns that
+            // existed when it was created, so columns added by later migrations would never be
+            // mirrored.
+            connection.execute_batch(&format!("DROP TRIGGER IF EXISTS {trigger}"))?;
             connection.execute_batch(&format!(
-                "CREATE TRIGGER IF NOT EXISTS {trigger}
+                "CREATE TRIGGER {trigger}
                    {timing} ON {table_name}
                    BEGIN
                      INSERT INTO runtime_outbox_batch (batch_id, created_at, payload)
@@ -109,7 +117,6 @@ pub(crate) fn install_replica_triggers(
                              CAST(strftime('%s', 'now') AS INTEGER) * 1000,
                              {payload});
                    END",
-                trigger = quote_identifier(&format!("{trigger_prefix}_{suffix}")),
                 table_name = quote_identifier(table),
             ))?;
         }
@@ -231,7 +238,7 @@ impl SqliteStore {
 
 fn validate_batch(batch: &RuntimeOutboxEnqueue<'_>) -> Result<(), StoreError> {
     validate_batch_id(batch.batch_id)?;
-    if batch.payload.trim().is_empty() || batch.payload.len() > MAX_PAYLOAD_BYTES {
+    if batch.payload.trim().is_empty() || batch.payload.len() > MAX_RUNTIME_OUTBOX_PAYLOAD_BYTES {
         return Err(StoreError::InvalidRuntimeOutboxPayload);
     }
     if serde_json::from_str::<serde_json::Value>(batch.payload).is_err() {
@@ -373,6 +380,32 @@ mod tests {
             )
             .expect("hot counter write");
         assert_eq!(store.list_runtime_outbox(10).expect("outbox").len(), 3);
+    }
+
+    #[test]
+    fn reinstalled_replica_triggers_mirror_columns_added_by_later_migrations() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let tables = store.durable_table_names().expect("contract tables");
+        install_replica_triggers(store.connection(), &tables).expect("first install");
+        store
+            .connection()
+            .execute_batch("ALTER TABLE guild_config ADD COLUMN later_column TEXT")
+            .expect("later migration");
+        install_replica_triggers(store.connection(), &tables).expect("next start");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO guild_config (guild_id, locale, later_column) VALUES ('g', 'pt', 'new')",
+                [],
+            )
+            .expect("insert");
+        let events = store.list_runtime_outbox(10).expect("outbox");
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].payload.contains("later_column"),
+            "{}",
+            events[0].payload
+        );
     }
 
     #[test]
