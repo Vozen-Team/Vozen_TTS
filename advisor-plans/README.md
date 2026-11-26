@@ -117,7 +117,7 @@ plan was vetted by reading the cited code at that commit.
 | 024  | Clean up games whose start or finish fails                                      | P2       | S      | —          | DONE (47e562e) |
 | 025  | Always answer component and slash interactions                                  | P2       | M      | 024        | DONE (c75989d) |
 | 026  | Isolate gateway sink failures and per-guild game dispatch                       | P2       | M      | 024, 025   | DONE (7808d49) |
-| 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | TODO           |
+| 027  | Stop caching Discord outages as invalid OAuth tokens                            | P2       | S      | —          | DONE (c4d5b9a) |
 | 028  | Make shut-up, skip and pause race-free and keep paired speech together          | P3       | M      | 021, 023   | TODO           |
 | 029  | Fix outbox timestamp units, oversized batches and stale replica triggers        | P3       | S      | —          | TODO           |
 | 030  | Prevent duplicate Stripe subscriptions, stale statuses and partial Ko-fi orders | P3       | M      | —          | TODO           |

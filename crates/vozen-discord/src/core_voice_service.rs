@@ -78,12 +78,15 @@ pub trait CommandSpeechSynthesizer: Send + Sync {
 pub trait CommandVoicePlayback: Send + Sync {
     async fn state(&self, guild_id: &str) -> Result<CommandPlaybackState, CommandPlaybackError>;
     async fn reserve(&self, guild_id: &str, lane: QueueLane) -> Result<bool, CommandPlaybackError>;
+    /// `is_cancelled` is checked again once the guild's call is locked, right before the track
+    /// joins the queue, so a `/shut-up` or `/skip` that lands during the enqueue still wins.
     async fn enqueue_reserved(
         &self,
         guild_id: &str,
         destination: &VoiceDestination,
         wav: &Path,
         options: QueueEnqueueOptions<'_>,
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<(), CommandPlaybackError>;
     async fn cancel_reservation(
         &self,
@@ -711,6 +714,7 @@ where
                     lane,
                     created_at_ms: (self.now_ms)().max(0) as u64,
                 },
+                &|| synthesis.cancelled(),
             )
             .await
         {
@@ -1092,17 +1096,9 @@ where
             emphasis_source: None,
             lead_silence_ms: 0,
         };
-        let outcome = self
-            .enqueue_synth_request(
-                invocation.guild_id,
-                invocation.user_id,
-                destination.as_ref(),
-                lane,
-                request,
-            )
-            .await;
-        if outcome == CorePreviewOutcome::Queued && sound {
-            let effect = SynthRequest {
+        let mut parts = vec![request];
+        if sound {
+            parts.push(SynthRequest {
                 text: String::new(),
                 model,
                 asset_path: Some(std::path::PathBuf::from("assets/sfx/rizz.wav")),
@@ -1115,17 +1111,18 @@ where
                 single_voice: Some(true),
                 emphasis_source: None,
                 lead_silence_ms: 0,
-            };
-            let _ = self
-                .enqueue_synth_request(
-                    invocation.guild_id,
-                    invocation.user_id,
-                    destination.as_ref(),
-                    lane,
-                    effect,
-                )
-                .await;
+            });
         }
+        // The line and its sound effect are queued back-to-back under one lease.
+        let outcome = self
+            .enqueue_synth_sequence(
+                invocation.guild_id,
+                invocation.user_id,
+                destination.as_ref(),
+                lane,
+                parts,
+            )
+            .await;
         CoreRizzResult {
             outcome: match outcome {
                 CorePreviewOutcome::Queued => CoreRizzOutcome::Queued,
@@ -1480,17 +1477,43 @@ where
             emphasis_source: None,
             lead_silence_ms: 0,
         };
-        let queued = match self
-            .enqueue_synth_request(
+        let mut parts = vec![joke_request];
+        if laughter {
+            parts.push(SynthRequest {
+                text: laughter_for_prefix(
+                    joke_lang_by_key(language)
+                        .expect("validated joke language")
+                        .prefix,
+                ),
+                model,
+                asset_path: None,
+                speed,
+                engine,
+                gcloud_budget: self.paid_budget(
+                    invocation.guild_id,
+                    invocation.user_id,
+                    engine,
+                    (self.now_ms)(),
+                ),
+                segments: None,
+                single_voice: Some(true),
+                emphasis_source: None,
+                lead_silence_ms: 1_000,
+            });
+        }
+        // The joke and its laugh are queued back-to-back under one lease, so other speech cannot
+        // land between the punchline and the laugh.
+        match self
+            .enqueue_synth_sequence(
                 invocation.guild_id,
                 invocation.user_id,
                 destination.as_ref(),
                 lane,
-                joke_request,
+                parts,
             )
             .await
         {
-            CorePreviewOutcome::Queued => true,
+            CorePreviewOutcome::Queued => {}
             CorePreviewOutcome::Busy => {
                 return CoreJokeResult {
                     outcome: CoreJokeOutcome::Busy,
@@ -1524,38 +1547,6 @@ where
                     joke: Some(joke),
                 };
             }
-        };
-        if queued && laughter {
-            let laugh_request = SynthRequest {
-                text: laughter_for_prefix(
-                    joke_lang_by_key(language)
-                        .expect("validated joke language")
-                        .prefix,
-                ),
-                model,
-                asset_path: None,
-                speed,
-                engine,
-                gcloud_budget: self.paid_budget(
-                    invocation.guild_id,
-                    invocation.user_id,
-                    engine,
-                    (self.now_ms)(),
-                ),
-                segments: None,
-                single_voice: Some(true),
-                emphasis_source: None,
-                lead_silence_ms: 1_000,
-            };
-            let _ = self
-                .enqueue_synth_request(
-                    invocation.guild_id,
-                    invocation.user_id,
-                    destination.as_ref(),
-                    lane,
-                    laugh_request,
-                )
-                .await;
         }
         CoreJokeResult {
             outcome: CoreJokeOutcome::Queued,
@@ -1571,6 +1562,21 @@ where
         lane: QueueLane,
         request: SynthRequest,
     ) -> CorePreviewOutcome {
+        self.enqueue_synth_sequence(guild_id, user_id, destination, lane, vec![request])
+            .await
+    }
+
+    /// Synthesises and queues the parts back-to-back under one guild synthesis lease, so no other
+    /// speech can land between them. The outcome is the first part's; once a part fails, the
+    /// remaining parts are dropped (a laugh without its joke would make no sense).
+    async fn enqueue_synth_sequence(
+        &self,
+        guild_id: &str,
+        user_id: &str,
+        destination: Option<&VoiceDestination>,
+        lane: QueueLane,
+        parts: Vec<SynthRequest>,
+    ) -> CorePreviewOutcome {
         let Some(destination) = destination else {
             return CorePreviewOutcome::PlaybackFailed;
         };
@@ -1580,6 +1586,29 @@ where
             return CorePreviewOutcome::PlaybackFailed;
         }
         synthesis.activate();
+        let mut first = None;
+        for request in parts {
+            let outcome = self
+                .enqueue_under_lease(&synthesis, guild_id, user_id, destination, lane, &request)
+                .await;
+            let queued = outcome == CorePreviewOutcome::Queued;
+            first.get_or_insert(outcome);
+            if !queued {
+                break;
+            }
+        }
+        first.unwrap_or(CorePreviewOutcome::PlaybackFailed)
+    }
+
+    async fn enqueue_under_lease(
+        &self,
+        synthesis: &crate::guild_synthesis_coordinator::GuildSynthesisLease,
+        guild_id: &str,
+        user_id: &str,
+        destination: &VoiceDestination,
+        lane: QueueLane,
+        request: &SynthRequest,
+    ) -> CorePreviewOutcome {
         match self.playback.reserve(guild_id, lane).await {
             Ok(true) => {}
             Ok(false) => return CorePreviewOutcome::Busy,
@@ -1589,7 +1618,7 @@ where
             let _ = self.playback.cancel_reservation(guild_id, lane).await;
             return CorePreviewOutcome::PlaybackFailed;
         }
-        let wav = match self.synthesizer.synthesize(&request).await {
+        let wav = match self.synthesizer.synthesize(request).await {
             Ok(wav) => wav,
             Err(_) => {
                 let _ = self.playback.cancel_reservation(guild_id, lane).await;
@@ -1612,6 +1641,7 @@ where
                     lane,
                     created_at_ms: (self.now_ms)().max(0) as u64,
                 },
+                &|| synthesis.cancelled(),
             )
             .await
         {
@@ -1770,6 +1800,7 @@ where
                     lane,
                     created_at_ms: (self.now_ms)().max(0) as u64,
                 },
+                &|| synthesis.cancelled(),
             )
             .await
         {
@@ -1982,7 +2013,11 @@ mod tests {
             _destination: &VoiceDestination,
             _wav: &Path,
             _options: QueueEnqueueOptions<'_>,
+            is_cancelled: &(dyn Fn() -> bool + Send + Sync),
         ) -> Result<(), CommandPlaybackError> {
+            if is_cancelled() {
+                return Err(CommandPlaybackError);
+            }
             self.enqueues.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }

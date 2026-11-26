@@ -577,6 +577,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
         destination: &VoiceDestination,
         wav: &Path,
         options: QueueEnqueueOptions<'_>,
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<(), CommandPlaybackError> {
         // Consume before acquiring Songbird. If the call disappeared during synthesis the core
         // service will invoke the idempotent cancellation path below; no reservation can leak.
@@ -590,7 +591,10 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
             .ok_or(CommandPlaybackError)?;
         let call = manager.get(discord_guild_id).ok_or(CommandPlaybackError)?;
         let mut handler = call.lock().await;
-        if !destination.is_current()
+        // Re-check cancellation under the call lock: `/shut-up` and `/skip` take the same lock,
+        // so a request cancelled during the awaits above must not reach the queue.
+        if is_cancelled()
+            || !destination.is_current()
             || handler.current_channel().map(|channel| channel.0.get())
                 != Some(
                     destination
@@ -697,16 +701,22 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
     }
 
     async fn skip(&self, guild_id: &str) -> Result<(), CommandPlaybackError> {
-        let guild_id = Self::guild_id(guild_id)?;
+        let discord_guild_id = Self::guild_id(guild_id)?;
         let manager = songbird::get(&self.context)
             .await
             .ok_or(CommandPlaybackError)?;
-        let call = manager.get(guild_id).ok_or(CommandPlaybackError)?;
+        let call = manager.get(discord_guild_id).ok_or(CommandPlaybackError)?;
         let handler = call.lock().await;
         songbird_driver(&handler)
             .queue()
             .skip()
-            .map_err(|_| CommandPlaybackError)
+            .map_err(|_| CommandPlaybackError)?;
+        // Songbird starts the next track on its own, so a skip also ends any pause; otherwise
+        // `/queue pause` would keep answering "nothing to pause" while audio plays.
+        if let Ok(mut ledger) = self.queue_metadata.lock() {
+            ledger.resume(guild_id);
+        }
+        Ok(())
     }
 
     async fn silence(&self, guild_id: &str) -> Result<(), CommandPlaybackError> {
@@ -902,6 +912,7 @@ impl CommandVoicePlayback for SongbirdCommandPlayback {
         _destination: &VoiceDestination,
         _wav: &Path,
         _options: vozen_core::QueueEnqueueOptions<'_>,
+        _is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<(), CommandPlaybackError> {
         Err(CommandPlaybackError)
     }
@@ -1000,6 +1011,17 @@ pub async fn leave_voice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_the_pause_after_a_skip_lets_the_queue_be_paused_again() {
+        let mut ledger = QueueTrackLedger::default();
+        assert!(ledger.pause("guild"));
+        // A second pause is a no-op while paused.
+        assert!(!ledger.pause("guild"));
+        // `skip` clears the flag because Songbird plays the next track immediately.
+        ledger.resume("guild");
+        assert!(ledger.pause("guild"));
+    }
 
     #[test]
     fn priority_speech_goes_ahead_of_standard_speech_within_the_burst_limit() {

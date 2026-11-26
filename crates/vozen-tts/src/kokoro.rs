@@ -318,6 +318,7 @@ impl KokoroEngine {
             .cache_dir
             .join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
+            crate::touch_cached(&destination).await;
             return Ok(destination);
         }
         let mut wavs = Vec::with_capacity(segments.len());
@@ -359,6 +360,7 @@ impl KokoroEngine {
         let key = cache_key(request);
         let destination = self.options.cache_dir.join(format!("{key}.wav"));
         if non_empty_file(&destination).await? {
+            crate::touch_cached(&destination).await;
             return Ok(destination);
         }
         tokio::fs::create_dir_all(&self.options.cache_dir).await?;
@@ -459,6 +461,7 @@ async fn write_cached(
 ) -> Result<PathBuf, TtsError> {
     tokio::fs::create_dir_all(directory).await?;
     if non_empty_file(&destination).await? {
+        crate::touch_cached(&destination).await;
         return Ok(destination);
     }
     let temporary = directory.join(format!(".{}.{}.tmp", std::process::id(), Uuid::new_v4()));

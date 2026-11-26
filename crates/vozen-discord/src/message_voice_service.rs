@@ -436,6 +436,7 @@ where
                     lane,
                     created_at_ms: now_ms.max(0) as u64,
                 },
+                &|| synthesis.cancelled(),
             )
             .await;
         let enqueue_ms = elapsed_ms(enqueue_started);
@@ -679,6 +680,7 @@ mod tests {
             _destination: &VoiceDestination,
             _wav: &Path,
             _options: QueueEnqueueOptions<'_>,
+            _is_cancelled: &(dyn Fn() -> bool + Send + Sync),
         ) -> Result<(), CommandPlaybackError> {
             self.enqueued.fetch_add(1, Ordering::Relaxed);
             Ok(())

@@ -306,6 +306,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         let destination = self.cache_dir.join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         // Keep the work queue bounded by the same provider semaphore used by single requests.
@@ -353,6 +354,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         let destination = self.cache_dir.join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
 
@@ -364,6 +366,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         // Check again after waiting: another request may have completed this exact cache key.
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         self.metrics.record_cache_miss();
@@ -417,6 +420,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         tokio::fs::create_dir_all(&self.cache_dir).await?;
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         let temporary = self.cache_dir.join(format!(".{}.wav", Uuid::new_v4()));
@@ -455,6 +459,20 @@ fn single_segment_request(
         emphasis_source: None,
         lead_silence_ms: 0,
     }
+}
+
+/// Marks a cache hit as the newest entry. Eviction removes the oldest files by mtime, and a hit's
+/// path may already sit in a Songbird queue (which opens files lazily), so a frequently used file
+/// must not look old. Best-effort: a failure only weakens the eviction order.
+pub(crate) async fn touch_cached(path: &Path) {
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(SystemTime::now()))
+    })
+    .await;
 }
 
 /// Keeps only the oldest `max_files` completed WAVs. Cleanup is deliberately best-effort: cache
@@ -961,6 +979,36 @@ mod tests {
         let parsed = parse_wav(&delayed_wav).expect("parsed");
         assert_eq!(parsed.data.len(), 44 + 44_100);
         assert!(parsed.data[..44_100].iter().all(|sample| *sample == 0));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_cache_hit_becomes_the_newest_entry_for_eviction() {
+        let root = temp_dir("cache-touch");
+        let models = root.join("models");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("model");
+        let runner = Arc::new(FakeRunner {
+            calls: AtomicUsize::new(0),
+            bytes: b"wav".to_vec(),
+        });
+        let engine = PiperEngine::new(runner.clone(), &models, root.join("cache"), 1);
+        let cached = engine.synth(&request()).await.expect("first");
+        // Older than "now" but well inside the 7-day retention window, so it is still a hit.
+        let long_ago = SystemTime::now() - Duration::from_secs(60 * 60);
+        std::fs::File::options()
+            .write(true)
+            .open(&cached)
+            .and_then(|file| file.set_modified(long_ago))
+            .expect("age the cache entry");
+        assert_eq!(engine.synth(&request()).await.expect("hit"), cached);
+        assert_eq!(runner.calls.load(Ordering::Relaxed), 1);
+        let modified = std::fs::metadata(&cached)
+            .and_then(|metadata| metadata.modified())
+            .expect("mtime");
+        assert!(modified > long_ago + Duration::from_secs(60));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 
