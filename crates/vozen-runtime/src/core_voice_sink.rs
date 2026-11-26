@@ -136,7 +136,12 @@ struct GameRuntime {
     default_engine: SynthesisEngine,
     executor: Mutex<Option<Arc<Executor>>>,
     tick_started: AtomicBool,
+    /// One ordered worker per guild with a running game, so a slow guild cannot delay the
+    /// round deadlines of every other guild.
+    guild_dispatchers: Mutex<BTreeMap<String, GameEventSender>>,
 }
+
+type GameEventSender = tokio::sync::mpsc::UnboundedSender<(GameManagerEvent, bool)>;
 
 pub struct CoreVoiceGatewaySink {
     store: Arc<Mutex<SqliteStore>>,
@@ -534,9 +539,61 @@ impl GameRuntime {
                         .gateway_state
                         .bot_voice_channel_id(&guild_id)
                         .is_some();
-                    let _ = runtime
-                        .dispatch_event(&context, event, speech_allowed, Some(&guild_id))
-                        .await;
+                    runtime.enqueue_game_event(&context, guild_id, event, speech_allowed);
+                }
+            }
+        });
+    }
+
+    /// Hands a game event to its guild's worker, starting one if needed. Events for one guild
+    /// stay in order; different guilds no longer wait for each other's speech or REST calls.
+    fn enqueue_game_event(
+        self: &Arc<Self>,
+        context: &Context,
+        guild_id: String,
+        event: GameManagerEvent,
+        speech_allowed: bool,
+    ) {
+        let Ok(mut dispatchers) = self.guild_dispatchers.lock() else {
+            return;
+        };
+        let item = match dispatchers.get(&guild_id) {
+            Some(sender) => match sender.send((event, speech_allowed)) {
+                Ok(()) => return,
+                // The worker retired between ticks; start a fresh one with the same event.
+                Err(returned) => returned.0,
+            },
+            None => (event, speech_allowed),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        if sender.send(item).is_err() {
+            return;
+        }
+        dispatchers.insert(guild_id.clone(), sender);
+        drop(dispatchers);
+        let runtime = self.clone();
+        let context = context.clone();
+        tokio::spawn(async move {
+            while let Some((event, speech_allowed)) = receiver.recv().await {
+                let _ = runtime
+                    .dispatch_event(&context, event, speech_allowed, Some(&guild_id))
+                    .await;
+                let idle = runtime
+                    .coordinator
+                    .lock()
+                    .map(|coordinator| !coordinator.active(&guild_id))
+                    .unwrap_or(true);
+                if !idle {
+                    continue;
+                }
+                // Retire under the map lock: senders also hold it, so no event can slip in
+                // between the emptiness check and the removal.
+                let Ok(mut dispatchers) = runtime.guild_dispatchers.lock() else {
+                    break;
+                };
+                if receiver.is_empty() {
+                    dispatchers.remove(&guild_id);
+                    break;
                 }
             }
         });
@@ -1731,6 +1788,7 @@ impl CoreVoiceGatewaySink {
                             default_engine: options.settings.default_engine,
                             executor: Mutex::new(None),
                             tick_started: AtomicBool::new(false),
+                            guild_dispatchers: Mutex::new(BTreeMap::new()),
                         })
                     })
             })
