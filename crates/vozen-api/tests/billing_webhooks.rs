@@ -15,9 +15,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use tower::ServiceExt;
 use vozen_api::{
-    premium_api::{
-        ActivationIdentity, ActivationIdentityError, DiscordIdentity, DiscordIdentityVerifier,
-    },
+    premium_api::{DiscordIdentity, DiscordIdentityVerifier},
     stripe_api::{
         StripeApiConfig, StripePriceIds, StripeSubscriptionLookup,
         stripe_router_with_subscription_lookup,
@@ -34,12 +32,6 @@ struct NoIdentity;
 impl DiscordIdentityVerifier for NoIdentity {
     async fn resolve_identity(&self, _: &str) -> Result<DiscordIdentity, ()> {
         Err(())
-    }
-    async fn resolve_activation_identity(
-        &self,
-        _: &str,
-    ) -> Result<ActivationIdentity, ActivationIdentityError> {
-        Err(ActivationIdentityError::InvalidToken)
     }
 }
 

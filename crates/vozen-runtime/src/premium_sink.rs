@@ -36,7 +36,7 @@ fn activation_within_limit(activations: &[String], seats: i64, guild_id: &str) -
 #[derive(Clone)]
 pub struct PremiumGatewaySink {
     store: Arc<Mutex<SqliteStore>>,
-    kofi_url: String,
+    premium_url: String,
     payments_enabled: bool,
     client_id: Option<String>,
     redemption_secret: Option<String>,
@@ -49,7 +49,7 @@ pub struct PremiumGatewaySink {
 impl PremiumGatewaySink {
     pub fn new(
         store: Arc<Mutex<SqliteStore>>,
-        kofi_url: String,
+        premium_url: String,
         payments_enabled: bool,
         client_id: Option<String>,
         redemption_secret: Option<String>,
@@ -58,7 +58,7 @@ impl PremiumGatewaySink {
     ) -> Result<Self, GatewayEventDispatchError> {
         Ok(Self {
             store,
-            kofi_url,
+            premium_url,
             payments_enabled,
             client_id,
             redemption_secret,
@@ -152,7 +152,7 @@ impl PremiumGatewaySink {
             lines.push(self.message("premium.enginePerks", command, &BTreeMap::new())?);
             lines.push(String::new());
             let mut parameters = BTreeMap::new();
-            parameters.insert("link", self.kofi_url.clone());
+            parameters.insert("link", self.premium_url.clone());
             lines.push(self.message("premium.buyHint", command, &parameters)?);
             if let Some(secret) = self.redemption_secret.as_deref()
                 && secret.len() >= VOTE_REDEMPTION_SECRET_MIN_LENGTH
@@ -382,7 +382,7 @@ impl PremiumGatewaySink {
                         .ephemeral(true));
                 }
                 let mut p = BTreeMap::new();
-                p.insert("link", self.kofi_url.clone());
+                p.insert("link", self.premium_url.clone());
                 return Ok(CreateInteractionResponseMessage::new()
                     .content(self.message("premium.noPass", command, &p)?)
                     .ephemeral(true));
@@ -394,7 +394,7 @@ impl PremiumGatewaySink {
                         .ephemeral(true));
                 }
                 let mut p = BTreeMap::new();
-                p.insert("link", self.kofi_url.clone());
+                p.insert("link", self.premium_url.clone());
                 return Ok(CreateInteractionResponseMessage::new()
                     .content(self.message("premium.noPass", command, &p)?)
                     .ephemeral(true));
@@ -709,7 +709,7 @@ impl GatewayEventSink for PremiumGatewaySink {
                                     .into()
                             } else {
                                 let mut p = BTreeMap::new();
-                                p.insert("link", self.kofi_url.clone());
+                                p.insert("link", self.premium_url.clone());
                                 self.component_message("premium.noPass", &component, &p)?
                             }
                         }
