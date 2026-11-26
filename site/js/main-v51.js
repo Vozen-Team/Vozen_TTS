@@ -616,7 +616,7 @@
   document.querySelector("[data-billing-plan='premium']")?.addEventListener("click", () => void startCheckout("premium", billingInterval(), proCard?.classList.contains("is-5") ? 5 : 2));
 
   /* ── Painel Premium (login com Discord + estado da conta) ─────────────
-     OAuth2 implicit (scopes identify + email): 100% client-side, sem segredo. O token vem no
+     OAuth2 implicit (scope identify): 100% client-side, sem segredo. O token vem no
      fragment (#access_token), guardamo-lo em sessionStorage, limpamos o fragment, e
      chamamos GET {API_BASE}/api/me/premium. A API valida o token na Discord e devolve só
      o estado DESTE utilizador. Escondido enquanto PREMIUM_API_BASE estiver vazio. */
@@ -748,7 +748,7 @@
     u.searchParams.set("client_id", CLIENT_ID);
     u.searchParams.set("redirect_uri", options && options.billing === true ? BILLING_OAUTH_REDIRECT : OAUTH_REDIRECT);
     u.searchParams.set("response_type", "token");
-    u.searchParams.set("scope", "identify email");
+    u.searchParams.set("scope", "identify");
     u.searchParams.set("state", state);
     location.href = u.toString();
     return null;

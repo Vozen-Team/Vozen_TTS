@@ -718,6 +718,9 @@ exit 64`,
     ]) {
       expect(script, retired).not.toContain(retired);
     }
+    // Only the retired email activation needed Discord's `email` scope.
+    expect(script).toContain('u.searchParams.set("scope", "identify")');
+    expect(script).not.toContain('identify email');
     expect(source(SITE_CSS)).not.toMatch(/\.ppanel__claim/);
     const all = i18nBundle();
     const langs = Object.keys(all);

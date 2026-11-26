@@ -62,8 +62,9 @@ The server dashboard shows its five highest TTS message counts and five current 
 When you log in on **vozen.org** with Discord (the account page and the server dashboard), Vozen uses Discord OAuth2 and requests only:
 
 - **`identify`** — your Discord ID, username and avatar, to show your account and to verify that a request is really yours.
-- **`email`** (account page) — requested only for the retired Ko-fi activation. The account login still asks Discord for this scope, so Discord may include your email in its reply to Vozen's identity check, but Vozen ignores it: the email is never read, stored, cached, or logged.
 - **`guilds`** (server dashboard only) — the **list of servers you belong to**, used solely to show which servers you can configure (those where you have **Manage Server** and Vozen is present). Vozen never posts, leaves, or changes anything about those servers from this list.
+
+Vozen no longer requests the **`email`** scope. A login made before that change may still carry it until the token expires; Vozen ignores it and never reads, stores, caches, or logs your email.
 
 The basic profile and server-list data are used **transiently** to answer the request and are **not stored** in the database — they may be held in memory for at most ~60 seconds (a short cache) and then discarded. The access token stays in **your browser** (`sessionStorage`), is sent only to Vozen's own API over HTTPS, and is never written to disk on our side. The plan and billing period picked before signing in for checkout may also sit in `sessionStorage` until the checkout resumes, and are removed once used. The dashboard only changes the same per-server settings you could change with `/config` in Discord.
 

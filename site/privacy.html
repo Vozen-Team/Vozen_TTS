@@ -46,8 +46,7 @@
         Regulation (GDPR) and similar laws. In plain language: Vozen keeps the settings it
         needs to work, and nothing else. It does <b>not</b> keep a log of your messages, sets
         <b>no cookies</b>, runs <b>no trackers</b>, and never asks you to type your Discord
-        email, phone number, or password. The account login still asks Discord for the
-        <b>email</b> permission, but Vozen does not read, store, or use your email.
+        email, phone number, or password, and its Discord login does not request your email.
       </p>
 
       <h2>1. Who we are &amp; how to contact us</h2>
@@ -93,7 +92,7 @@
       <h2>4. What we do NOT store</h2>
       <ul>
         <li>We do <b>not</b> keep a history or log of your chat messages. Text is turned into speech on the fly and then discarded.</li>
-        <li>We do <b>not</b> read, store, cache, or log the email Discord may include when you sign in. Only a retired purchase-activation feature ever used it.</li>
+        <li>We do <b>not</b> request, store, cache, or log your Discord email.</li>
         <li>To speed up repeated phrases, recently synthesized audio may be cached on the server. It is keyed by a content hash rather than your user ID, rotates out under a bounded cache policy, and can still reveal the spoken content to someone with server-file access.</li>
         <li>Outside of a transcription session you consented to, the bot stays deafened and does not listen to or store voice-channel audio.</li>
         <li>We do <b>not</b> keep web access logs that tie your IP address to your activity. Our API (<code>api.vozen.org</code>) uses your IP only <b>momentarily</b>, in memory, for rate-limiting and security — it is never written to our logs. (This website is served by GitHub Pages, whose standard host logs are outside our control; see §9.)</li>
@@ -131,8 +130,8 @@
       <p>
         When you log in with Discord to view your account or the server dashboard, we use Discord
         OAuth2 and request your basic profile (<b>identify</b>) and, for the dashboard, your
-        <b>server list</b> (<b>guilds</b>). The account login also asks for the <b>email</b>
-        permission, which Vozen ignores. No payment email or checkout credential is requested.
+        <b>server list</b> (<b>guilds</b>). No email, payment email or checkout credential is
+        requested.
         Basic profile and server-list data may be cached in memory for at most ~60 seconds and
         are not written to our database. Your access token stays in <b>your browser</b> and is
         sent only to Vozen's own API over HTTPS.
