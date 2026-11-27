@@ -17,6 +17,7 @@ pub mod dashboard_api;
 pub mod dashboard_oauth;
 pub mod dashboard_validation;
 pub mod discord_oauth;
+pub mod entitlements_api;
 pub mod install_api;
 pub mod premium_api;
 pub mod stripe_api;
