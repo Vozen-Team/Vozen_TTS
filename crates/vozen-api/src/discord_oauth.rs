@@ -1,7 +1,7 @@
 //! Discord OAuth verifier for the browser account API.
 //!
 //! Access tokens are treated as credentials: this module never logs or stores a token, and only
-//! caches the SHA-256 digest of a token for the short identity-only lookup used by receipt claims.
+//! caches the SHA-256 digest of a token for the short identity-only lookup used by account calls.
 
 use std::{
     collections::HashMap,
@@ -14,9 +14,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::admin_api::{AdminAuthorization, AdminAuthorizationResolver};
-use crate::premium_api::{
-    ActivationIdentity, ActivationIdentityError, DiscordIdentity, DiscordIdentityVerifier,
-};
+use crate::premium_api::{DiscordIdentity, DiscordIdentityVerifier};
 
 const DISCORD_ME: &str = "https://discord.com/api/v10/users/@me";
 const DISCORD_OAUTH_ME: &str = "https://discord.com/api/v10/oauth2/@me";
@@ -229,33 +227,6 @@ impl DiscordOAuthVerifier {
         })
     }
 
-    async fn resolve_verified_email(
-        &self,
-        bearer: &str,
-    ) -> Result<ActivationIdentity, ActivationIdentityError> {
-        let oauth = self.fetch_oauth(bearer).await.map_err(map_oauth_error)?;
-        if oauth.application_id != self.expected_client_id.as_ref() {
-            return Err(ActivationIdentityError::WrongAudience);
-        }
-        if !oauth.scopes.iter().any(|scope| scope == "identify") {
-            return Err(ActivationIdentityError::InvalidToken);
-        }
-        if !oauth.scopes.iter().any(|scope| scope == "email") {
-            return Err(ActivationIdentityError::NoEmailScope);
-        }
-        let user = self.fetch_user(bearer).await.map_err(map_oauth_error)?;
-        if user.id != oauth.user_id {
-            return Err(ActivationIdentityError::InvalidToken);
-        }
-        let Some(email) = user.email.filter(|email| !email.trim().is_empty()) else {
-            return Err(ActivationIdentityError::EmailMissing);
-        };
-        if !user.verified {
-            return Err(ActivationIdentityError::EmailUnverified);
-        }
-        Ok(ActivationIdentity { id: user.id, email })
-    }
-
     async fn fetch_oauth(&self, bearer: &str) -> Result<OAuthInfo, DiscordHttpError> {
         let value = self.http.get_json(DISCORD_OAUTH_ME, bearer).await?;
         parse_oauth(value).ok_or(DiscordHttpError::InvalidToken)
@@ -319,13 +290,6 @@ impl DiscordIdentityVerifier for DiscordOAuthVerifier {
             );
         })
     }
-
-    async fn resolve_activation_identity(
-        &self,
-        bearer: &str,
-    ) -> Result<ActivationIdentity, ActivationIdentityError> {
-        self.resolve_verified_email(bearer).await
-    }
 }
 
 #[async_trait]
@@ -352,8 +316,6 @@ struct DiscordUser {
     username: String,
     avatar: Option<String>,
     avatar_decoration_asset: Option<String>,
-    email: Option<String>,
-    verified: bool,
 }
 
 fn parse_oauth(value: Value) -> Option<OAuthInfo> {
@@ -406,11 +368,6 @@ fn parse_user(value: Value) -> Option<DiscordUser> {
             .and_then(Value::as_str)
             .filter(|asset| is_safe_discord_asset(asset))
             .map(str::to_owned),
-        email: object
-            .get("email")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        verified: object.get("verified") == Some(&Value::Bool(true)),
     })
 }
 
@@ -420,13 +377,6 @@ fn is_safe_discord_asset(asset: &str) -> bool {
         && asset
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
-fn map_oauth_error(error: DiscordHttpError) -> ActivationIdentityError {
-    match error {
-        DiscordHttpError::InvalidToken => ActivationIdentityError::InvalidToken,
-        DiscordHttpError::Unavailable => ActivationIdentityError::DiscordUnavailable,
-    }
 }
 
 fn token_cache_key(token: &str) -> [u8; 32] {
@@ -574,62 +524,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.avatar_decoration_asset, None);
-    }
-
-    #[tokio::test]
-    async fn activation_requires_email_scope_verified_email_and_matching_identity() {
-        let wrong_audience = Arc::new(FakeHttp {
-            calls: Mutex::new(Vec::new()),
-            oauth: Ok(oauth("other-client", "user-a", &["identify", "email"])),
-            user: Ok(user("user-a", Some("buyer@example.com"), true)),
-            bot_user: Err(DiscordHttpError::Unavailable),
-        });
-        assert_eq!(
-            verifier(wrong_audience)
-                .resolve_activation_identity("token")
-                .await,
-            Err(ActivationIdentityError::WrongAudience)
-        );
-
-        let no_scope = Arc::new(FakeHttp {
-            calls: Mutex::new(Vec::new()),
-            oauth: Ok(oauth("vozen-client", "user-a", &["identify"])),
-            user: Ok(user("user-a", Some("buyer@example.com"), true)),
-            bot_user: Err(DiscordHttpError::Unavailable),
-        });
-        assert_eq!(
-            verifier(no_scope)
-                .resolve_activation_identity("token")
-                .await,
-            Err(ActivationIdentityError::NoEmailScope)
-        );
-
-        let good = Arc::new(FakeHttp {
-            calls: Mutex::new(Vec::new()),
-            oauth: Ok(oauth("vozen-client", "user-a", &["identify", "email"])),
-            user: Ok(user("user-a", Some("buyer@example.com"), true)),
-            bot_user: Err(DiscordHttpError::Unavailable),
-        });
-        assert_eq!(
-            verifier(good).resolve_activation_identity("token").await,
-            Ok(ActivationIdentity {
-                id: "user-a".into(),
-                email: "buyer@example.com".into()
-            })
-        );
-
-        let unavailable = Arc::new(FakeHttp {
-            calls: Mutex::new(Vec::new()),
-            oauth: Err(DiscordHttpError::Unavailable),
-            user: Ok(user("user-a", Some("buyer@example.com"), true)),
-            bot_user: Err(DiscordHttpError::Unavailable),
-        });
-        assert_eq!(
-            verifier(unavailable)
-                .resolve_activation_identity("token")
-                .await,
-            Err(ActivationIdentityError::DiscordUnavailable)
-        );
     }
 
     #[tokio::test]

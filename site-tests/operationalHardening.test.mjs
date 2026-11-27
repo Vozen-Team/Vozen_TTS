@@ -37,8 +37,6 @@ const fnSource = (script, signature) => {
   const end = rest.indexOf('\n  function ');
   return (end < 0 ? rest : rest.slice(0, end)).replace(/^\s*\/\/.*$/gm, '');
 };
-const claimCardSource = () => fnSource(source(SITE_JS), 'function claimCard()');
-const helpModalSource = () => fnSource(source(SITE_JS), 'function claimHelpModal()');
 const i18nBundle = () => {
   const sandbox = {
     window: {},
@@ -592,9 +590,6 @@ exit 64`,
   });
   it('keeps the account journey focused and the session exit visible', () => {
     const script = source(SITE_JS);
-    const claim = claimCardSource();
-    expect(claim).toContain('return "";');
-    expect(claim).not.toContain('Stripe subscriptions are managed from the account panel.');
     expect(script).toContain('function billingCheckoutModal(plan, interval)');
     expect(script).toContain('function ensureStripeJs()');
     expect(script).toContain('createEmbeddedCheckoutPage');
@@ -625,14 +620,7 @@ exit 64`,
       script.indexOf('const billingInterval'),
     );
     expect(checkoutSource).not.toContain('window.location.href');
-    expect(claim).toContain('id="activate-purchase"');
-    expect(claim).toContain('role="dialog"');
-    expect(claim).toContain('id="ppClaimClose"');
-    expect(claim).toContain('<details class="ppanel__receipt"');
-    expect(claim).toContain('class="ppanel__activatebtn"');
     expect(script).toContain('class="ppanel__logout-icon"');
-    expect(script).toContain('function openPurchaseActivation()');
-    expect(script).toContain('function mountPurchaseActivation(el)');
   });
   it('loads Stripe.js for the on-site embedded Checkout and cache-busts the runtime', () => {
     const page = source('site/index.html');
@@ -712,203 +700,40 @@ exit 64`,
   it('localizes account accessibility labels from the canonical dictionary', () => {
     const script = source(SITE_JS);
     expect(script).toContain('t("account.copyDiscordId")');
-    expect(script).toContain('t("account.closeActivation")');
     expect(script).not.toContain('aria-label="Copy Discord ID"');
   });
-  // Delivery happens when the buyer activates here, so the checkbox itself must explicitly name
-  // immediate performance and the applicable loss of the withdrawal right before either path.
-  it('gates pass activation behind an express consent checkbox', () => {
+  // Ko-fi was retired: the account page must not ship the receipt, email-activation or help
+  // flows, nor call the API routes the Rust runtime removed. Billing still uses the two shared
+  // `claim.*` strings (close button and log-in-again prompt), so only those may remain.
+  it('no longer ships the retired Ko-fi claim flow', () => {
     const script = source(SITE_JS);
-    expect(script).toContain('id="ppClaimConsent"');
-    expect(script).toContain('claim.consent');
-    // The guard must refuse when unticked — failing open would activate the pass with no
-    // acknowledgement at all.
-    expect(script).toMatch(/if \(!consent \|\| !consent\.checked\)/);
-    expect(script).toContain('claim.consentRequired');
-  });
-  it('renders explicit immediate-delivery consent with a real terms link', () => {
-    const card = fnSource(source(SITE_JS), 'function claimCard()');
-    expect(card).toContain('claim.consent');
-    expect(card).toContain('claim.consentTerms');
-    expect(card).toMatch(/<a href="\/terms"/);
-    // The <a> is injected in place of the {terms} placeholder inside the trusted consent copy.
-    expect(card).toContain('.replace("{terms}"');
-    const english = i18nBundle().en['claim.consent'];
-    expect(english).toMatch(/immediate activation/i);
-    expect(english).toMatch(/withdrawal right/i);
-  });
-  it('implements instant activation with strict success parsing and one-shot OAuth resume', () => {
-    const script = source(SITE_JS);
-    const card = claimCardSource();
-    const activation = fnSource(script, 'async function doInstantActivation(');
-    expect(card).toContain('id="ppActivateBtn"');
-    expect(card).toContain('claim.giftNote');
-    expect(card.indexOf('ppActivateBtn')).toBeLessThan(card.indexOf('ppClaimCode'));
-    expect(script).toContain('const ACTIVATION_TERMS_VERSION = "2026-07-19"');
-    expect(script).toContain('u.searchParams.set("scope", "identify email")');
-    expect(activation).toContain('PREMIUM_API_BASE + "/api/activate"');
-    expect(activation).toContain('termsAccepted: true');
-    expect(activation).toMatch(/res\.status === 200 && body\.ok === true/);
-    expect(script).toContain('const ACTIVATION_INTENT_TTL_MS = 5 * 60 * 1000');
-    expect(script).toContain('sessionStorage.removeItem(ACTIVATION_INTENT_KEY)');
-    expect(script).toContain('allowRelogin: false');
-    expect(script).toContain('downloadActivationConfirmation');
-    expect(script).toContain('acceptedAtIso');
-  });
-  // The claim field takes the whole receipt URL now (extractReceiptCode, src/premium/claim.ts),
-  // so the copy must stop teaching people to perform surgery on an address bar — "the code
-  // after txid=" was never a reasonable thing to ask, and on the monthly receipt it actively
-  // misled: the code sits mid-URL, so selecting to the end drags &mode=g along.
-  //
-  // Asserted as an absence, deliberately. Checking that ten languages each "say to paste the
-  // link" is not something a string match can honestly do — but the surgical instruction is
-  // one literal token, and its absence is checkable in every language.
-  it('no longer asks buyers to extract the code from the URL', () => {
-    const bundle = source(SITE_I18N);
-    const sandbox = {
-      window: {},
-    };
-    new Function('window', bundle)(sandbox.window);
-    const all = sandbox.window.VOZEN_I18N ?? {};
-    const langs = Object.keys(all);
-    expect(langs.length).toBeGreaterThan(0);
-    for (const lang of langs) {
-      for (const key of [
-        'claim.hint',
-        'claim.placeholder',
-        'claim.useReceiptCode',
-        'claim.notfound',
-      ]) {
-        expect(all[lang][key], `${lang} ${key} exists`).toBeTruthy();
-        expect(all[lang][key], `${lang} ${key} still says txid=`).not.toContain('txid=');
-      }
+    for (const retired of [
+      '/api/link',
+      '/api/activate',
+      '/api/claim-help',
+      'function claimCard(',
+      'function claimHelpModal(',
+      'ACTIVATION_INTENT_KEY',
+      'REF_RE',
+    ]) {
+      expect(script, retired).not.toContain(retired);
     }
-  });
-  // Closing the receipt tab is not a dead end — Ko-fi emails the buyer a receipt — but the card
-  // never said so, which made it one in practice. The line has to name the email first (the copy
-  // every buyer has), and hand the genuinely-stuck tail to the help modal (plan 036) rather than
-  // dumping them straight on support.
-  it('offers a way back when the buyer no longer has the receipt', () => {
-    const card = claimCardSource();
-    expect(card).toContain('claim.lost');
-    expect(card).toContain('claim.lostHelp');
-    // The modal is the escape hatch now; support lives inside it, one step further in.
-    expect(card).toContain('ppClaimHelpOpen');
-  });
-  // The `.js-support` wiring at the top of the file runs ONCE over the document at load, and both
-  // the claim card and the help modal are injected later, after OAuth. An anchor leaning on that
-  // wiring would render with no href at all — so the markup must carry the URL itself. A silent
-  // hrefless link is exactly the failure the recovery path exists to prevent.
-  it('renders the support link with a real href, not the one-time wiring', () => {
-    const modal = helpModalSource();
-    expect(modal).toContain('${SUPPORT_URL}');
-    expect(modal, 'must not rely on the one-time .js-support wiring').not.toContain('js-support');
-  });
-  // The Ko-fi email receipt shows `Ref: S-M1X823C9FW` — the only code-looking string in the whole
-  // email, and one we can NEVER accept: the webhook payload has no such field, so no pending row
-  // carries it. Someone hunting for a code finds that, pastes it, and gets a flat "no purchase
-  // found" for a purchase they really made. Catch the shape before the request leaves the browser
-  // and send them somewhere useful instead.
-  it('catches the Ko-fi order Ref before it reaches the server', () => {
-    const script = source(SITE_JS);
-    expect(script).toMatch(/REF_RE\s*=/);
-    const claim = fnSource(script, 'async function doClaim(');
-    expect(claim).toContain('REF_RE');
-    expect(claim).toContain('claim.help.refPasted');
-    // Must be decided BEFORE the fetch: reaching the server means a 404 the buyer cannot act on.
-    const refAt = claim.indexOf('REF_RE');
-    const fetchAt = claim.indexOf('fetch(');
-    expect(refAt, 'Ref check must precede the fetch').toBeLessThan(fetchAt);
-  });
-  // Every dismissal a modal can offer, because someone who cannot close it is trapped on the one
-  // page they went to for help. Esc is the one most often forgotten.
-  it('makes the help modal dismissable and announced', () => {
-    const modal = helpModalSource();
-    expect(modal).toContain('role="dialog"');
-    expect(modal).toContain('aria-modal="true"');
-    expect(modal).toContain('aria-labelledby');
-    const script = source(SITE_JS);
-    expect(script).toContain('ppClaimHelpClose'); // the X
-    expect(script).toMatch(/Escape/); // keyboard
-    expect(script).toContain('ppClaimHelpBackdrop'); // click-outside
-  });
-  // The help request carries the EMAIL, not the Ref: Ko-fi's transaction search matches by email,
-  // so the Ref is useless to the owner (verified against the live seller panel, 2026-07-17). The
-  // email is a lookup hint, not proof — the owner still confirms the paid order and grants by hand.
-  it('collects the Ko-fi email in the help modal and posts it, not the Ref', () => {
-    const modal = helpModalSource();
-    expect(modal).toContain('id="ppClaimHelpEmail"');
-    expect(modal).toContain('type="email"');
-    expect(modal).toContain('claim.help.emailPlaceholder');
-    const script = source(SITE_JS);
-    // The POST body must send { email: ... } — a lingering { ref } would reach the endpoint's
-    // bad_email guard and the buyer would get nothing.
-    expect(script).toMatch(/body:\s*JSON\.stringify\(\{\s*email:/);
-  });
-  it('translates the recovery and help copy into every advertised site language', () => {
+    // Only the retired email activation needed Discord's `email` scope.
+    expect(script).toContain('u.searchParams.set("scope", "identify")');
+    expect(script).not.toContain('identify email');
+    expect(source(SITE_CSS)).not.toMatch(/\.ppanel__claim/);
     const all = i18nBundle();
     const langs = Object.keys(all);
     expect(langs.length).toBeGreaterThan(0);
     for (const lang of langs) {
-      // Split into separate keys on purpose: no translation has to carry markup through esc().
-      for (const key of [
-        'claim.lost',
-        'claim.lostHelp',
-        'claim.help.title',
-        'claim.help.step1',
-        'claim.help.step2',
-        'claim.help.emailPlaceholder',
-        'claim.help.send',
-        'claim.help.refPasted',
-        'claim.help.notEmail',
-        'claim.help.sent',
-        'claim.help.stillStuck',
-      ]) {
-        expect(all[lang][key], `${lang} ${key}`).toBeTruthy();
+      const claimKeys = Object.keys(all[lang])
+        .filter((key) => key.startsWith('claim.'))
+        .sort();
+      expect(claimKeys, lang).toEqual(['claim.help.close', 'claim.loginAgain']);
+      for (const [key, value] of Object.entries(all[lang])) {
+        expect(String(value), `${lang} ${key}`).not.toMatch(/ko-?fi/i);
       }
     }
-  });
-  it('translates the consent copy into every advertised site language', () => {
-    const bundle = source(SITE_I18N);
-    const sandbox = {
-      window: {},
-    };
-    new Function('window', bundle)(sandbox.window);
-    const all = sandbox.window.VOZEN_I18N ?? {};
-    const langs = Object.keys(all);
-    expect(langs.length).toBeGreaterThan(0);
-    for (const lang of langs) {
-      // Untranslated consent text is not a cosmetic gap: someone who cannot read what they
-      // are accepting has not knowingly accepted it.
-      expect(all[lang]['claim.consent'], `${lang} claim.consent`).toBeTruthy();
-      expect(all[lang]['claim.consentRequired'], `${lang} claim.consentRequired`).toBeTruthy();
-      expect(all[lang]['claim.consentTerms'], `${lang} claim.consentTerms`).toBeTruthy();
-      // Every consent string must keep the {terms} placeholder — that is where the clickable
-      // terms link is injected. A translation that drops it would render a linkless sentence.
-      expect(all[lang]['claim.consent'], `${lang} keeps the {terms} slot`).toContain('{terms}');
-      for (const key of [
-        'claim.instantBtn',
-        'claim.instantWorking',
-        'claim.giftNote',
-        'claim.orReceipt',
-        'claim.activationOk',
-        'claim.downloadConfirmation',
-        'claim.emailMissing',
-        'claim.emailUnverified',
-        'claim.serviceUnavailable',
-        'claim.loginAgain',
-        'claim.resumeExpired',
-      ]) {
-        expect(all[lang][key], `${lang} ${key}`).toBeTruthy();
-      }
-    }
-  });
-  // The terms link inside the consent line must look clickable — a distinct colour, not the dim
-  // body colour it would inherit from .ppanel__claimconsent. Without it the only affordance is the
-  // cursor, which nobody sees; the buyer never realises the terms are a link.
-  it('styles the consent terms link as clickable', () => {
-    const css = source(SITE_CSS);
-    expect(css).toMatch(/\.ppanel__claimconsent a\s*\{[^}]*var\(--aqua\)/);
   });
   it('documents the Stripe digital checkout contract', () => {
     const terms = source('site/terms.html');

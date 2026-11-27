@@ -10,7 +10,7 @@ docker compose -f docker-compose.rust.prod.yml up -d --build
 docker compose -f docker-compose.rust.prod.yml logs -f vozen
 ```
 
-Preenche `DISCORD_TOKEN`, `CLIENT_ID`, os segredos Top.gg/Ko-fi/OAuth/Premium e
+Preenche `DISCORD_TOKEN`, `CLIENT_ID`, os segredos Top.gg/Stripe/OAuth/Premium e
 os caminhos de voz em `.env.rust.prod`. Mantém `rust-data` num disco persistente;
 é onde vivem SQLite e caches. Consulta [DEPLOY.md](../DEPLOY.md) para backup,
 healthcheck e rollback.

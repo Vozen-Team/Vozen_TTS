@@ -43,7 +43,7 @@ struct PendingPronunciationForm {
 pub struct PronunciationGatewaySink {
     service: PronunciationService,
     localizer: VoiceResponseLocalizer,
-    kofi_url: String,
+    premium_url: String,
     payments_enabled: bool,
     pending_forms: Mutex<BTreeMap<String, PendingPronunciationForm>>,
 }
@@ -51,14 +51,14 @@ pub struct PronunciationGatewaySink {
 impl PronunciationGatewaySink {
     pub fn new(
         store: Arc<Mutex<SqliteStore>>,
-        kofi_url: String,
+        premium_url: String,
         payments_enabled: bool,
     ) -> Result<Self, GatewayEventDispatchError> {
         Ok(Self {
             service: PronunciationService::new(store),
             localizer: VoiceResponseLocalizer::from_generated_contract()
                 .map_err(|_| GatewayEventDispatchError)?,
-            kofi_url,
+            premium_url,
             payments_enabled,
             pending_forms: Mutex::new(BTreeMap::new()),
         })
@@ -345,7 +345,7 @@ impl PronunciationGatewaySink {
                 )?;
                 if self.payments_enabled && scope == PronunciationScope::Personal && limit == 3 {
                     let mut upsell = BTreeMap::new();
-                    upsell.insert("url", self.kofi_url.clone());
+                    upsell.insert("url", self.premium_url.clone());
                     content.push('\n');
                     content.push_str(&self.localized(
                         "pron.limitUpsell",
@@ -495,7 +495,7 @@ mod tests {
     fn list_response_keeps_node_shape_and_scope_copy() {
         let sink = PronunciationGatewaySink::new(
             Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store"))),
-            "https://ko-fi.com/vozen".into(),
+            "https://vozen.org/#premium".into(),
             true,
         )
         .expect("sink");

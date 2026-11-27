@@ -1,13 +1,12 @@
-//! Pending Ko-fi purchases that could not yet be attributed to a Discord account.
+//! Legacy Ko-fi purchases that were never attributed to a Discord account.
 //!
-//! Only a transaction ID or a separately verified Discord-account email may be used by the
-//! future claim API. This store intentionally treats the email value as an opaque HMAC key.
-
-use rusqlite::{Connection, OptionalExtension, params};
+//! Vozen no longer sells through Ko-fi, so nothing writes or claims these rows any more. The
+//! table stays readable for the owner's admin overview (an unclaimed purchase can still be
+//! granted by hand) and keeps its retention sweep so the remaining rows expire on schedule.
+//! The email value is an opaque HMAC key and is never returned in clear text.
 
 use crate::{SqliteStore, StoreError};
 
-pub const PENDING_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1_000;
 pub const ADMIN_PENDING_SCAN_CAP: i64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +40,7 @@ pub struct KofiPendingGrantInput {
     pub plan: KofiPendingPlan,
     pub days: i64,
     pub seats: i64,
-    /// Shop purchases are false. Only membership rows may rebind email to Discord on claim.
+    /// Shop purchases are false; membership payments are true.
     pub is_subscription: bool,
 }
 
@@ -64,29 +63,6 @@ type KofiPendingRow = (
 );
 
 impl SqliteStore {
-    /// Returns true only for the first delivery of a transaction ID.
-    pub fn record_kofi_pending_grant(
-        &self,
-        input: &KofiPendingGrantInput,
-        now: i64,
-    ) -> Result<bool, StoreError> {
-        record_kofi_pending_grant_on(self.connection(), input, now)
-    }
-
-    pub fn unclaimed_kofi_pending_by_transaction(
-        &self,
-        transaction_id: &str,
-    ) -> Result<Option<KofiPendingGrant>, StoreError> {
-        unclaimed_kofi_pending_by_transaction_on(self.connection(), transaction_id)
-    }
-
-    pub fn unclaimed_kofi_pending_by_email_hash(
-        &self,
-        email_hash: &str,
-    ) -> Result<Vec<KofiPendingGrant>, StoreError> {
-        unclaimed_kofi_pending_by_email_hash_on(self.connection(), email_hash)
-    }
-
     /// Bounded owner-only overview, ordered newest first. It never returns a clear-text email.
     pub fn all_unclaimed_kofi_pending(
         &self,
@@ -105,104 +81,12 @@ impl SqliteStore {
             .collect()
     }
 
-    /// Conditional update is the single-use boundary for a later claim transaction.
-    pub fn mark_kofi_pending_claimed(
-        &self,
-        transaction_id: &str,
-        now: i64,
-    ) -> Result<bool, StoreError> {
-        mark_kofi_pending_claimed_on(self.connection(), transaction_id, now)
-    }
-
     /// Removes claimed and unclaimed pending records before the caller-provided cutoff.
     pub fn purge_old_kofi_pending(&self, cutoff: i64) -> Result<usize, StoreError> {
         Ok(self
             .connection()
             .execute("DELETE FROM kofi_pending WHERE created_at < ?1", [cutoff])?)
     }
-}
-
-pub(crate) fn record_kofi_pending_grant_on(
-    connection: &Connection,
-    input: &KofiPendingGrantInput,
-    now: i64,
-) -> Result<bool, StoreError> {
-    Ok(connection.execute(
-        "INSERT OR IGNORE INTO kofi_pending
-         (transaction_id, email_hash, plan, days, seats, created_at, claimed_at, is_subscription)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
-        params![
-            input.transaction_id,
-            input.email_hash,
-            input.plan.as_str(),
-            input.days,
-            input.seats,
-            now,
-            i64::from(input.is_subscription),
-        ],
-    )? > 0)
-}
-
-pub(crate) fn unclaimed_kofi_pending_by_transaction_on(
-    connection: &Connection,
-    transaction_id: &str,
-) -> Result<Option<KofiPendingGrant>, StoreError> {
-    pending_from(
-        connection,
-        "SELECT transaction_id, email_hash, plan, days, seats, created_at, claimed_at, is_subscription
-         FROM kofi_pending WHERE transaction_id = ?1 AND claimed_at IS NULL",
-        [transaction_id],
-    )
-}
-
-pub(crate) fn unclaimed_kofi_pending_by_email_hash_on(
-    connection: &Connection,
-    email_hash: &str,
-) -> Result<Vec<KofiPendingGrant>, StoreError> {
-    pending_list(
-        connection,
-        "SELECT transaction_id, email_hash, plan, days, seats, created_at, claimed_at, is_subscription
-         FROM kofi_pending WHERE email_hash = ?1 AND claimed_at IS NULL ORDER BY created_at",
-        [email_hash],
-    )
-}
-
-pub(crate) fn mark_kofi_pending_claimed_on(
-    connection: &Connection,
-    transaction_id: &str,
-    now: i64,
-) -> Result<bool, StoreError> {
-    Ok(connection.execute(
-        "UPDATE kofi_pending SET claimed_at = ?1
-             WHERE transaction_id = ?2 AND claimed_at IS NULL",
-        params![now, transaction_id],
-    )? > 0)
-}
-
-fn pending_from(
-    connection: &Connection,
-    sql: &str,
-    parameter: [&str; 1],
-) -> Result<Option<KofiPendingGrant>, StoreError> {
-    connection
-        .query_row(sql, parameter, pending_from_row)
-        .optional()?
-        .map(pending_from_raw)
-        .transpose()
-}
-
-fn pending_list(
-    connection: &Connection,
-    sql: &str,
-    parameter: [&str; 1],
-) -> Result<Vec<KofiPendingGrant>, StoreError> {
-    let mut statement = connection.prepare(sql)?;
-    statement
-        .query_map(parameter, pending_from_row)?
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(pending_from_raw)
-        .collect()
 }
 
 fn pending_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KofiPendingRow> {
@@ -237,87 +121,57 @@ fn pending_from_raw(
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
+
     use super::*;
 
     const NOW: i64 = 1_000_000;
 
-    fn pending(transaction_id: &str) -> KofiPendingGrantInput {
-        KofiPendingGrantInput {
-            transaction_id: transaction_id.into(),
-            email_hash: Some("opaque-hmac".into()),
-            plan: KofiPendingPlan::Plus,
-            days: 30,
-            seats: 0,
-            is_subscription: false,
-        }
+    fn insert(store: &SqliteStore, transaction_id: &str, created_at: i64, claimed: bool) {
+        store
+            .connection()
+            .execute(
+                "INSERT INTO kofi_pending
+                 (transaction_id, email_hash, plan, days, seats, created_at, claimed_at, is_subscription)
+                 VALUES (?1, 'opaque-hmac', 'plus', 30, 0, ?2, ?3, 0)",
+                params![transaction_id, created_at, claimed.then_some(created_at + 1)],
+            )
+            .expect("insert legacy pending row");
     }
 
     #[test]
-    fn pending_deliveries_are_idempotent_and_claimed_once() {
+    fn overview_lists_only_unclaimed_rows_newest_first() {
         let store = SqliteStore::open_in_memory().expect("store");
-        let input = pending("transaction");
-        assert!(store.record_kofi_pending_grant(&input, NOW).expect("first"));
-        assert!(
-            !store
-                .record_kofi_pending_grant(&input, NOW + 1)
-                .expect("retry")
-        );
+        insert(&store, "old", NOW, false);
+        insert(&store, "claimed", NOW + 1, true);
+        insert(&store, "new", NOW + 2, false);
+        let pending = store.all_unclaimed_kofi_pending(10).expect("overview");
         assert_eq!(
-            store
-                .unclaimed_kofi_pending_by_transaction("transaction")
-                .expect("read")
-                .expect("pending")
-                .claimed_at,
-            None
+            pending
+                .iter()
+                .map(|grant| grant.input.transaction_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new", "old"]
         );
-        assert!(
-            store
-                .mark_kofi_pending_claimed("transaction", NOW + 2)
-                .expect("claim")
-        );
-        assert!(
-            !store
-                .mark_kofi_pending_claimed("transaction", NOW + 3)
-                .expect("repeat")
-        );
-        assert!(
-            store
-                .unclaimed_kofi_pending_by_transaction("transaction")
-                .expect("read")
-                .is_none()
-        );
+        assert_eq!(pending[0].input.plan, KofiPendingPlan::Plus);
+        assert_eq!(pending[0].claimed_at, None);
     }
 
     #[test]
-    fn hashes_group_unclaimed_renewals_but_null_never_matches() {
+    fn retention_sweep_removes_claimed_and_unclaimed_rows_before_the_cutoff() {
         let store = SqliteStore::open_in_memory().expect("store");
-        let first = pending("one");
-        let mut second = pending("two");
-        second.is_subscription = true;
-        let mut no_email = pending("three");
-        no_email.email_hash = None;
-        store.record_kofi_pending_grant(&first, NOW).expect("one");
-        store
-            .record_kofi_pending_grant(&second, NOW + 1)
-            .expect("two");
-        store
-            .record_kofi_pending_grant(&no_email, NOW + 2)
-            .expect("three");
+        insert(&store, "one", NOW, false);
+        insert(&store, "two", NOW + 1, true);
+        insert(&store, "three", NOW + 2, false);
+        assert_eq!(store.purge_old_kofi_pending(NOW + 2).expect("purge"), 2);
         assert_eq!(
             store
-                .unclaimed_kofi_pending_by_email_hash("opaque-hmac")
-                .expect("hash")
+                .all_unclaimed_kofi_pending(10)
+                .expect("remaining")
                 .into_iter()
                 .map(|grant| grant.input.transaction_id)
                 .collect::<Vec<_>>(),
-            vec!["one", "two"]
-        );
-        assert_eq!(store.purge_old_kofi_pending(NOW + 2).expect("purge"), 2);
-        assert!(
-            store
-                .unclaimed_kofi_pending_by_transaction("three")
-                .expect("remaining")
-                .is_some()
+            vec!["three"]
         );
     }
 }
