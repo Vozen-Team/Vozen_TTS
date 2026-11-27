@@ -96,11 +96,8 @@ CLIENT_ID=<DISCORD_APPLICATION_ID>
 # Motor TTS — piper é grátis/self-hosted, é o default se deixares em branco
 TTS_ENGINE=piper
 
-# Ko-fi (se já tiveres o produto configurado)
-KOFI_WEBHOOK_TOKEN=<token da Ko-fi, em Settings -> API>
-KOFI_WEBHOOK_PORT=3001
-# Rust runtime: set HEALTH_PORT=3001 instead when the Rust process owns the HTTP listener.
-# KOFI_WEBHOOK_PORT is the legacy Node-only listener setting.
+# Rust runtime: set HEALTH_PORT=3001 when the Rust process owns the HTTP listener.
+# O Ko-fi foi retirado: as variáveis KOFI_* já não são lidas.
 
 # Painel Premium — ATIVA aqui
 PREMIUM_API_ENABLED=true

@@ -35,7 +35,6 @@ impl ErrorReporter {
         let secrets = [
             "DISCORD_TOKEN",
             "ERROR_WEBHOOK_URL",
-            "KOFI_WEBHOOK_TOKEN",
             "TOPGG_WEBHOOK_SECRET",
             "TOPGG_HELPER_WEBHOOK_SECRET",
             "TOPGG_MUSIC_WEBHOOK_SECRET",

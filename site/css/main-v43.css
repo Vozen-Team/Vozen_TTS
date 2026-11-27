@@ -889,7 +889,7 @@ button.is-tap, a.btn.is-tap, [role="button"].is-tap {
 /* ── pricing ────────────────────────────────────────────── */
 /* Toggle Mês/Ano: default mensal; ao carregar em "Anual" a grelha ganha .is-annual e os
    preços/períodos trocam (spans .amt--m/.amt--y e .per--m/.per--y). Só visual — os botões
-   de compra vão à mesma página do Ko-fi (que já tem os 4 produtos). */
+   de compra abrem o checkout Stripe do plano escolhido. */
 .bill-toggle {
   display: flex; width: fit-content; margin: 0 auto clamp(30px, 4vw, 44px); padding: 5px;
   border-radius: 999px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line-2);
@@ -1222,111 +1222,11 @@ button.is-tap, a.btn.is-tap, [role="button"].is-tap {
   background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
 }
 .ppanel__servers li code { font-family: var(--f-mono); color: var(--text-2); }
-/* Card "Ativar uma compra": reclamar o código do recibo Ko-fi (auto-link). */
-.ppanel__claim {
-  margin-top: 20px; padding: 16px 16px 14px; border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line);
-}
-.ppanel__claimtitle { display: block; color: var(--text-0); font-weight: 700; font-size: 14.5px; }
-.ppanel__claimhint { margin: 6px 0 12px; color: var(--text-2); font-size: 12.8px; line-height: 1.5; }
-.ppanel__activatebtn {
-  width: 100%; min-height: 44px; padding: 10px 18px; border: 0; border-radius: 10px;
-  cursor: pointer; background: var(--aqua); color: var(--bg-0); font-weight: 800; font-size: 13.5px;
-  transition: filter 0.16s ease, opacity 0.16s ease;
-}
-.ppanel__activatebtn:hover { filter: brightness(1.08); }
-.ppanel__activatebtn:disabled { opacity: 0.6; cursor: default; }
-.ppanel__gift { margin: 9px 0 0; color: var(--amber); font-size: 12.2px; line-height: 1.45; }
-.ppanel__claimsep {
-  display: flex; align-items: center; gap: 10px; margin: 16px 0 10px;
-  color: var(--text-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em;
-}
-.ppanel__claimsep::before,
-.ppanel__claimsep::after { content: ""; height: 1px; flex: 1; background: var(--line); }
-.ppanel__claimform { display: flex; gap: 8px; flex-wrap: wrap; }
-.ppanel__claiminput {
-  flex: 1 1 200px; min-width: 0; padding: 10px 12px; border-radius: 10px;
-  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text-0);
-  font-family: var(--f-mono); font-size: 13px;
-}
-.ppanel__claiminput::placeholder { color: var(--text-2); }
-.ppanel__claiminput:focus { outline: none; border-color: var(--aqua); }
-.ppanel__claiminput:disabled { opacity: 0.6; }
-.ppanel__claimbtn {
-  flex: 0 0 auto; padding: 10px 18px; border-radius: 10px; border: none; cursor: pointer;
-  background: rgba(46, 230, 200, 0.08); color: var(--aqua); font-weight: 700; font-size: 13.5px;
-  border: 1px solid rgba(46, 230, 200, 0.3);
-  transition: filter 0.16s ease, opacity 0.16s ease;
-}
-.ppanel__claimbtn:hover { filter: brightness(1.08); }
-.ppanel__claimbtn:disabled { opacity: 0.6; cursor: default; }
-/* Consentimento de entrega imediata. Legivel, nao letra pequena: so vale se a pessoa
-   perceber o que aceita — esconde-lo destruiria a propria coisa que existe para dar. */
-.ppanel__claimconsent { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0 0; color: var(--text-2); font-size: 12.8px; line-height: 1.5; cursor: pointer; }
-.ppanel__claimconsent input { margin-top: 2px; flex: none; accent-color: var(--aqua); }
-/* O link dos termos herdaria o cinzento apagado do texto; a cor de destaque + sublinhado dizem
-   que e clicavel (mesma linguagem do botao "perdeste o recibo?"). */
-.ppanel__claimconsent a { color: var(--aqua); text-decoration: underline; text-underline-offset: 2px; }
-.ppanel__claimconsent a:hover { text-decoration: none; }
-.ppanel__claimmsg { margin: 10px 0 0; font-size: 12.8px; line-height: 1.45; }
-.ppanel__claimmsg.is-ok { color: var(--aqua); }
-.ppanel__claimmsg.is-err { color: rgba(255, 110, 169, 0.9); }
-.ppanel__activationitems { margin: 8px 0; padding-left: 18px; color: var(--text-1); }
-.ppanel__activationitems li + li { margin-top: 3px; }
-.ppanel__msglink {
-  display: inline; padding: 0; border: 0; background: none; color: var(--aqua);
-  font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer;
-}
-.ppanel__msglink:hover { text-decoration: none; }
-/* Saida para quem ja nao tem o recibo. Separada por uma linha porque e um caminho
-   alternativo, nao um passo do fluxo — mas nao esbatida ao ponto de so a encontrar
-   quem ja sabe que existe. */
-.ppanel__claimlost { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 12.2px; line-height: 1.5; }
-/* Sem nowrap: o rotulo e uma frase, nao uma palavra com seta. Em PT/DE/RU passa dos
-   350px e num cartao estreito (~262px no telemovel) saia para fora da caixa. */
-.ppanel__claimlost a { color: var(--aqua); text-decoration: none; }
-.ppanel__claimlost a:hover { text-decoration: underline; }
-/* Abre o modal de ajuda. E um <button> porque e uma accao, nao navegacao — mas parece o
-   link que era antes, que e o que a pessoa reconhece. */
-.ppanel__claimlostbtn {
-  display: inline; padding: 0; border: 0; background: none; cursor: pointer;
-  color: var(--aqua); font: inherit; text-align: left;
-}
-.ppanel__claimlostbtn:hover { text-decoration: underline; }
 
-/* ── Modal de ajuda da activacao (plano 036) ──────────────────────────── */
+/* ── Modal do painel (confirmação de saída) ──────────────────────────── */
 .ppmodal { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 16px; }
 .ppmodal[hidden] { display: none; }
 .ppmodal__backdrop { position: absolute; inset: 0; background: rgba(4, 6, 12, 0.72); backdrop-filter: blur(6px); }
-.ppmodal__box {
-  position: relative; width: 100%; max-width: 420px; max-height: 85vh; overflow-y: auto;
-  padding: 22px; border-radius: var(--radius); border: 1px solid var(--line-2);
-  background: var(--panel-2, #12141c); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
-}
-.ppmodal__box:focus { outline: none; }
-/* 40px de alvo: um X pequeno num telemovel e a diferenca entre fechar e ficar preso. */
-.ppmodal__x {
-  position: absolute; top: 8px; inset-inline-end: 8px; width: 40px; height: 40px;
-  border: 0; border-radius: 50%; background: none; color: var(--text-2);
-  font-size: 24px; line-height: 1; cursor: pointer;
-}
-.ppmodal__x:hover { color: var(--text-0); background: rgba(255, 255, 255, 0.06); }
-.ppmodal__title { margin: 0 40px 14px 0; font-family: var(--f-display); font-size: 17px; color: var(--text-0); }
-.ppmodal__step { margin: 0 0 12px; color: var(--text-2); font-size: 12.8px; line-height: 1.55; }
-.ppmodal__num {
-  display: inline-grid; place-items: center; width: 18px; height: 18px; margin-inline-end: 6px;
-  border-radius: 50%; background: var(--aqua); color: #04060c; font-size: 11px; font-weight: 700;
-}
-/* Mensagem pronta a colar quando a notificacao nao sai. Selecionavel e monospace: e para
-   ser copiada, e o comprador ja esta a ter um mau dia. */
-.ppmodal__copy {
-  margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2);
-  background: rgba(255, 255, 255, 0.04); color: var(--text-1); font-family: var(--f-mono);
-  font-size: 11.5px; white-space: pre-wrap; word-break: break-word; user-select: all;
-}
-.ppmodal__foot { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.2px; }
-.ppmodal__foot a { color: var(--text-2); text-decoration: none; }
-.ppmodal__foot a:hover { color: var(--aqua); text-decoration: underline; }
 body.is-modal-open { overflow: hidden; }
 .ppanel__none { display: flex; flex-direction: column; gap: 4px; }
 .ppanel__none b { color: var(--text-0); font-size: 15px; }
@@ -1527,7 +1427,7 @@ body.is-modal-open { overflow: hidden; }
 .price-card__badge--plus { color: #f6f7fe; background: linear-gradient(115deg, #6672ff, #8a97ff); box-shadow: 0 4px 16px -4px rgba(102, 114, 255, 0.6); }
 .price-card__badge--max { color: #fff; background: linear-gradient(115deg, #a76aff, #ff6fd8); box-shadow: 0 4px 16px -4px rgba(167, 106, 255, 0.6); }
 .price-card__note { margin-top: auto; padding-top: 22px; font-family: var(--f-mono); font-size: 12.5px; color: var(--text-2); }
-/* Botão de compra (Ko-fi) nos cartões pagos. */
+/* Botão de compra (checkout Stripe) nos cartões pagos. */
 .price-card__buy {
   display: block; margin-top: 16px; padding: 11px 18px; border-radius: 12px;
   text-align: center; font-weight: 700; font-size: 14.5px; text-decoration: none;

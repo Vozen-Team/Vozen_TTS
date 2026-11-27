@@ -13,7 +13,7 @@
   var API = "__VOZEN_PUBLIC_API_ORIGIN__";
   var REDIRECT = new URL("/account", location.href).href;
   var TOK_KEY = "vozen.dtoken";
-  // The account flow requests `identify email`; the dashboard flow requests `identify guilds`.
+  // The account flow requests `identify`; the dashboard flow requests `identify guilds`.
   // Keep an ownership marker so an account-only token triggers dashboard consent instead of
   // being sent to /api/dashboard and misleadingly displayed as an expired login.
   var DASHBOARD_AUTH_KEY = "vozen.dashboardAuth";
@@ -873,7 +873,7 @@
       renderLogin("");
       return;
     }
-    // A token created by /account has `identify email`, not `guilds`. Re-authorize once for the
+    // A token created by /account has `identify`, not `guilds`. Re-authorize once for the
     // panel instead of sending it to the dashboard API and misleadingly displaying "expired".
     if (!hasDashboardAuth()) {
       login();

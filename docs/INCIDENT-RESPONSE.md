@@ -9,14 +9,14 @@ exigido pela lei.
 
 1. **Conter (minutos).**
    - Rodar já os segredos expostos: `DISCORD_TOKEN` (Developer Portal → Bot → Reset Token),
-     `KOFI_WEBHOOK_TOKEN` (Ko-fi → Webhooks), e qualquer outro em `.env`.
+     `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` (Dashboard Stripe), e qualquer outro em `.env`.
    - Se o VPS estiver comprometido: `sudo systemctl stop vozen.service`, revogar chaves SSH
      suspeitas em `~/.ssh/authorized_keys` (vozen **e** root), rever `ufw status` e `last`/
      `journalctl -u ssh`.
    - Não apagar logs — são prova.
 
 2. **Avaliar o âmbito (o que foi acedido).**
-   - Que dados? BD (`tts.db`: IDs de Discord, preferências, stats, hashes de email do Ko-fi),
+   - Que dados? BD (`tts.db`: IDs de Discord, preferências, stats, hashes de email do Ko-fi antigo),
      `.env` (segredos).
    - Como? Cruzar horas: `journalctl` do sshd, acessos ao Caddy (`api.vozen.org`), tamanho/
      mtime da BD.

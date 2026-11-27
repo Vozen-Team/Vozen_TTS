@@ -14,23 +14,13 @@
   // escondido (a feature ainda não está no ar). Preenche com o teu host quando tiveres o
   // domínio/túnel + PREMIUM_API_ENABLED=true no bot. Ex.: "https://api.vozen.xyz".
   const PREMIUM_API_BASE = "__VOZEN_PUBLIC_API_ORIGIN__";
-  const ACTIVATION_TERMS_VERSION = "2026-07-19";
-  const ACTIVATION_INTENT_KEY = "vozen.activationIntent";
   const BILLING_INTENT_KEY = "vozen.billingIntent";
-  const ACTIVATION_INTENT_TTL_MS = 5 * 60 * 1000;
   const INVITE_URL =
     CLIENT_ID && CLIENT_ID !== "YOUR_CLIENT_ID"
       ? `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=${INVITE_PERMISSIONS}&scope=bot%20applications.commands`
       : "#";
   const TOPGG_URL =
     CLIENT_ID && CLIENT_ID !== "YOUR_CLIENT_ID" ? `https://top.gg/bot/${CLIENT_ID}/vote` : "#";
-
-  // Forma do Ref de encomenda do Ko-fi, como aparece no recibo por email: `Ref: S-M1X823C9FW`.
-  // Nao e um codigo que possamos aceitar — o webhook do Ko-fi nao envia este campo — mas e a unica
-  // coisa com ar de codigo no email, por isso e o que a pessoa cola. Reconhece-se para a mandar
-  // para a ajuda em vez de um 404 seco. Nao ha risco de apanhar um tx id verdadeiro: esses sao
-  // UUIDs, e nenhum UUID comeca por "S-".
-  const REF_RE = /^S-[A-Za-z0-9]{6,16}$/;
 
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -289,13 +279,6 @@
     }),
   );
 
-  /* ── link de compra do Ko-fi por estado dos toggles ───────
-     As memberships do Ko-fi só cobram ao MES, por isso os passes anuais sao produtos da
-     Shop, cada um com o seu link proprio. Os toggles acima so trocam uma classe e deixam o
-     CSS mostrar o preco certo — mas um href nao e algo que o CSS mude. Sem isto, quem
-     escolhe "anual" vê o preço anual e recebe o link direto para o produto correspondente.
-     Os codigos tem de bater certo com o KOFI_SHOP_MAP do bot: e o direct_link_code que diz
-     ao webhook o que foi comprado (o Ko-fi nao envia o nome do produto). */
   /* ── Stripe checkout ───────────────────────────────────────────────── */
   function readBillingIntent() {
     try {
@@ -633,7 +616,7 @@
   document.querySelector("[data-billing-plan='premium']")?.addEventListener("click", () => void startCheckout("premium", billingInterval(), proCard?.classList.contains("is-5") ? 5 : 2));
 
   /* ── Painel Premium (login com Discord + estado da conta) ─────────────
-     OAuth2 implicit (scopes identify + email): 100% client-side, sem segredo. O token vem no
+     OAuth2 implicit (scope identify): 100% client-side, sem segredo. O token vem no
      fragment (#access_token), guardamo-lo em sessionStorage, limpamos o fragment, e
      chamamos GET {API_BASE}/api/me/premium. A API valida o token na Discord e devolve só
      o estado DESTE utilizador. Escondido enquanto PREMIUM_API_BASE estiver vazio. */
@@ -643,7 +626,6 @@
   const OAUTH_REDIRECT = new URL("/account", location.href).href;
   const BILLING_OAUTH_REDIRECT = new URL("/", location.href).href;
   let panelState = { mode: "hidden" };
-  let activationResume = { kind: "none" };
 
   // Billing ships independently from the long-lived i18n bundle. Keep a small English fallback
   // here so a browser holding the previous four-hour i18n cache never renders raw billing keys.
@@ -740,10 +722,8 @@
 
   function login(options = {}) {
     let state;
-    let nonce;
     try {
       state = randState();
-      nonce = randState();
     } catch {
       alert("Your browser can't generate a secure login token. Please update it and try again.");
       return;
@@ -763,26 +743,12 @@
       } else {
         sessionStorage.removeItem(BILLING_INTENT_KEY);
       }
-      if (options && options.resumeActivation === true) {
-        sessionStorage.setItem(
-          ACTIVATION_INTENT_KEY,
-          JSON.stringify({
-            action: "activate-by-email",
-            termsVersion: ACTIVATION_TERMS_VERSION,
-            createdAt: Date.now(),
-            nonce,
-            oauthState: state,
-          }),
-        );
-      } else {
-        sessionStorage.removeItem(ACTIVATION_INTENT_KEY);
-      }
     } catch {}
     const u = new URL("https://discord.com/oauth2/authorize");
     u.searchParams.set("client_id", CLIENT_ID);
     u.searchParams.set("redirect_uri", options && options.billing === true ? BILLING_OAUTH_REDIRECT : OAUTH_REDIRECT);
     u.searchParams.set("response_type", "token");
-    u.searchParams.set("scope", "identify email");
+    u.searchParams.set("scope", "identify");
     u.searchParams.set("state", state);
     location.href = u.toString();
     return null;
@@ -792,7 +758,6 @@
     try {
       sessionStorage.removeItem(TOK_KEY);
       sessionStorage.removeItem(NAV_USER_KEY);
-      sessionStorage.removeItem(ACTIVATION_INTENT_KEY);
     } catch {}
     if (IS_ACCOUNT) {
       window.location.href = "/";
@@ -833,33 +798,6 @@
     // token — nunca aceitamos um fragment que não conseguimos verificar como nosso.
     if (!expected || st !== expected) return null;
     return { token: tok, state: st };
-  }
-
-  // The activation intent is consumed before any replay. It is tied to the OAuth state, expires
-  // quickly, and cannot survive a terms-version change, which makes the replay strictly one-shot.
-  function consumeActivationIntent(oauthState) {
-    let raw = null;
-    try {
-      raw = sessionStorage.getItem(ACTIVATION_INTENT_KEY);
-      sessionStorage.removeItem(ACTIVATION_INTENT_KEY);
-    } catch {}
-    if (!raw) return { kind: "none" };
-    try {
-      const intent = JSON.parse(raw);
-      const age = Date.now() - Number(intent.createdAt);
-      const valid =
-        intent.action === "activate-by-email" &&
-        intent.termsVersion === ACTIVATION_TERMS_VERSION &&
-        intent.oauthState === oauthState &&
-        typeof intent.nonce === "string" &&
-        intent.nonce.length >= 16 &&
-        Number.isFinite(age) &&
-        age >= 0 &&
-        age <= ACTIVATION_INTENT_TTL_MS;
-      return valid ? { kind: "resume" } : { kind: "invalid" };
-    } catch {
-      return { kind: "invalid" };
-    }
   }
 
   function setPanel(s) {
@@ -906,7 +844,6 @@
         location.replace("/#premium");
         return;
       }
-      activationResume = consumeActivationIntent(fromHash.state);
       // Bounce de regresso: o /dashboard reutiliza o redirect /account (o único registado no
       // portal) para o OAuth com scope `guilds`. O token fica no sessionStorage (mesmo
       // domínio), e saltamos de volta. Só caminhos internos (anti open-redirect).
@@ -962,18 +899,6 @@
         }
         window.setTimeout(() => void startCheckout(purchase.plan, purchase.interval, purchase.seats), 0);
         return;
-      }
-      const resume = activationResume;
-      activationResume = { kind: "none" };
-      if (resume.kind === "resume") {
-        const consent = document.getElementById("ppClaimConsent");
-        if (consent) consent.checked = true;
-        window.setTimeout(
-          () => void doInstantActivation(null, { allowRelogin: false }),
-          0,
-        );
-      } else if (resume.kind === "invalid") {
-        setClaimMessage(t("claim.resumeExpired"), "err");
       }
     } catch {
       setPanel({ mode: "error" });
@@ -1039,84 +964,6 @@
     btn.innerHTML = `${avatarMarkup(u, "nav__login-av", 24)}<span>${esc(username)}</span>`;
   }
 
-  // Card "Ativar uma compra": o comprador cola o código do recibo Ko-fi e reclama a compra
-  // que chegou sem Discord ID (o checkout de subscrição não tem caixa de mensagem). POST
-  // autenticado a /api/link — ver doClaim. Aparece sempre que a pessoa está logada.
-  function claimCard() {
-    return "";
-    /* return (
-      `<div class="ppanel__claim ppmodal" id="activate-purchase" role="dialog" aria-modal="true" aria-labelledby="ppClaimTitle" hidden>` +
-      `<div class="ppanel__claimbox" tabindex="-1">` +
-      `<button type="button" class="ppanel__claimclose" id="ppClaimClose" aria-label="${esc(t("account.closeActivation"))}">&times;</button>` +
-      `<div class="ppanel__claimhead"><span class="ppanel__claimeyebrow">${t("account.purchaseActivation")}</span>` +
-      `<span class="ppanel__claimtitle" id="ppClaimTitle">${t("claim.title")}</span></div>` +
-      // Consent is explicit in the label itself, before either delivery path. The server records a
-      // stable terms version for instant activation; receipt-code activation keeps its HTTP contract.
-      // {terms} no texto de claim.consent marca onde entra o link — substituido por um <a> para
-      // /terms. O <a> e conteudo interativo: clicar nele abre os termos sem marcar a checkbox
-      // (comportamento do <label> no HTML) — confirmado no browser.
-      `<section class="ppanel__activationway ppanel__activationway--instant">` +
-      `<div class="ppanel__wayhead"><span class="ppanel__waynum">01</span><span><b>${t("claim.instantBtn")}</b><small>${t("account.recommended")}</small></span></div>` +
-      `<p class="ppanel__claimhint">${t("claim.instantHint")}</p>` +
-      `<label class="ppanel__claimconsent"><input type="checkbox" id="ppClaimConsent"> <span>${t("claim.consent").replace("{terms}", `<a href="/terms" target="_blank" rel="noopener">${t("claim.consentTerms")}</a>`)}</span></label>` +
-      `<p class="ppanel__claimmsg" id="ppInstantMsg" role="status" aria-live="polite" hidden></p>` +
-      `<button type="button" class="ppanel__activatebtn" id="ppActivateBtn">${t("claim.instantBtn")}</button>` +
-      `<p class="ppanel__gift">${t("claim.giftNote")}</p></section>` +
-      `<details class="ppanel__receipt">` +
-      `<summary><span class="ppanel__waynum">02</span><span><b>${t("claim.orReceipt")}</b><small>${t("claim.hint")}</small></span>` +
-      `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>` +
-      `<section class="ppanel__receiptbody">` +
-      `<p class="ppanel__claimhint">${t("claim.hint")}</p>` +
-      `<form class="ppanel__claimform" id="ppClaimForm">` +
-      `<input type="text" id="ppClaimCode" class="ppanel__claiminput" placeholder="${esc(t("claim.placeholder"))}" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="120">` +
-      `<button type="submit" class="ppanel__claimbtn" id="ppClaimBtn">${t("claim.btn")}</button>` +
-      `</form>` +
-      `<p class="ppanel__claimmsg" id="ppClaimMsg" role="status" aria-live="polite" hidden></p>` +
-      // Sits AFTER the status message on purpose: "no purchase found" is the moment someone
-      // realises they no longer have the receipt, and the way out should be the next thing they
-      // read. Closing the receipt tab was never a dead end — Ko-fi emails every buyer a copy —
-      // but the card never said so, which made it one in practice.
-      `<p class="ppanel__claimlost">${t("claim.lost")} <button type="button" class="ppanel__claimlostbtn" id="ppClaimHelpOpen">${t("claim.lostHelp")}</button></p></section>` +
-      `</details>` +
-      `</div>` +
-      `</div>`
-    ); */
-  }
-
-  // Modal de ajuda (plano 036). Existe por causa de uma armadilha do recibo do Ko-fi: o email
-  // mostra `Ref: S-M1X823C9FW` — a unica coisa com ar de codigo no email inteiro — e o Ref NUNCA
-  // pode activar nada, porque o webhook do Ko-fi nao no-lo envia. Quem procura um codigo encontra
-  // aquilo, cola na caixa de cima, e leva um 404 seco por uma compra que fez mesmo.
-  //
-  // Passo 1 leva ao caminho que ACTIVA (o botao do email -> endereco da pagina -> caixa de cima).
-  // Passo 2 pede o EMAIL que a pessoa usou no Ko-fi — nao o Ref. Porque? A pesquisa de transacoes
-  // do Ko-fi so casa por nome ou email (confirmado no painel real, 2026-07-17); o Ref nao e
-  // procuravel. Um clique manda (Discord ID, email) para o dono, que cola o email na pesquisa do
-  // Ko-fi, confirma a encomenda paga e faz o grant. O email e pista de procura, nao prova (plano
-  // 021 continua de pe). O suporte fica no rodape, um passo mais dentro.
-  //
-  // O href do suporte vai inline e nao por class="js-support": essa ligacao corre UMA vez sobre o
-  // documento no arranque e isto e injectado depois do OAuth — sairia sem href nenhum.
-  function claimHelpModal() {
-    return (
-      `<div class="ppmodal" id="ppClaimHelp" hidden>` +
-      `<div class="ppmodal__backdrop" id="ppClaimHelpBackdrop"></div>` +
-      `<div class="ppmodal__box" role="dialog" aria-modal="true" aria-labelledby="ppClaimHelpTitle" tabindex="-1" id="ppClaimHelpBox">` +
-      `<button type="button" class="ppmodal__x" id="ppClaimHelpClose" aria-label="${esc(t("claim.help.close"))}">&times;</button>` +
-      `<h2 class="ppmodal__title" id="ppClaimHelpTitle">${t("claim.help.title")}</h2>` +
-      `<p class="ppmodal__step"><span class="ppmodal__num">1</span> ${t("claim.help.step1")}</p>` +
-      `<p class="ppmodal__step"><span class="ppmodal__num">2</span> ${t("claim.help.step2")}</p>` +
-      `<form class="ppanel__claimform" id="ppClaimHelpForm">` +
-      `<input type="email" id="ppClaimHelpEmail" class="ppanel__claiminput" placeholder="${esc(t("claim.help.emailPlaceholder"))}" autocomplete="email" autocapitalize="off" inputmode="email" spellcheck="false" maxlength="254">` +
-      `<button type="submit" class="ppanel__claimbtn" id="ppClaimHelpSend">${t("claim.help.send")}</button>` +
-      `</form>` +
-      `<p class="ppanel__claimmsg" id="ppClaimHelpMsg" role="status" aria-live="polite" hidden></p>` +
-      `<p class="ppmodal__foot"><a href="${SUPPORT_URL}" target="_blank" rel="noopener">${t("claim.help.stillStuck")}</a></p>` +
-      `</div>` +
-      `</div>`
-    );
-  }
-
   function renderOk(d) {
     const u = d.user || {};
     const av = avatarMarkup(u, "ppanel__av", 128);
@@ -1166,317 +1013,8 @@
       `<div class="ppanel__statusgrid">` +
       statusRow("Vozen Premium", premiumActive, premiumParts.join(" &middot; ")) +
       statusRow("Vozen Plus", plusActive, plusDetail) +
-      `</div>${servers}${claimCard()}`
+      `</div>${servers}`
     );
-  }
-
-  function setClaimMessage(text, kind) {
-    const msg = document.getElementById("ppInstantMsg");
-    if (!msg) return null;
-    msg.hidden = false;
-    msg.textContent = text;
-    msg.className = "ppanel__claimmsg" + (kind ? " is-" + kind : "");
-    return msg;
-  }
-
-  function setClaimAction(text, label, action) {
-    const msg = setClaimMessage(text, "err");
-    if (!msg) return;
-    msg.appendChild(document.createTextNode(" "));
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "ppanel__msglink";
-    button.textContent = label;
-    button.addEventListener("click", action, { once: true });
-    msg.appendChild(button);
-  }
-
-  function downloadActivationConfirmation(confirmation, items) {
-    const acceptedAt = Number(confirmation && confirmation.acceptedAt);
-    const safeItems = Array.isArray(items)
-      ? items.map((item) => ({
-          plan: item && item.plan,
-          days: item && item.days,
-          seats: item && item.seats,
-          expiresAt: item && item.expiresAt,
-        }))
-      : [];
-    const payload = {
-      service: "Vozen",
-      confirmation: {
-        id: confirmation && confirmation.id,
-        acceptedAt: Number.isFinite(acceptedAt) ? acceptedAt : null,
-        acceptedAtIso: Number.isFinite(acceptedAt) ? new Date(acceptedAt).toISOString() : null,
-        termsVersion: confirmation && confirmation.termsVersion,
-        method: confirmation && confirmation.method,
-      },
-      items: safeItems,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], {
-      type: "application/json;charset=utf-8",
-    });
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = `vozen-activation-${payload.confirmation.id || "confirmation"}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(href), 0);
-  }
-
-  function renderActivationSuccess(body) {
-    const msg = setClaimMessage(t("claim.activationOk"), "ok");
-    if (!msg) return;
-    const items = Array.isArray(body.items) ? body.items : [];
-    const list = document.createElement("ul");
-    list.className = "ppanel__activationitems";
-    for (const item of items) {
-      const row = document.createElement("li");
-      const plan = item && item.plan === "premium" ? "Vozen Premium" : "Vozen Plus";
-      const parts = [plan, `${Number(item && item.days) || 0} ${t("claim.days")}`];
-      if (item && item.plan === "premium") {
-        parts.push(`${Number(item.seats) || 0} ${t("claim.seats")}`);
-      }
-      row.textContent = parts.join(" · ");
-      list.appendChild(row);
-    }
-    msg.appendChild(list);
-    const download = document.createElement("button");
-    download.type = "button";
-    download.className = "ppanel__msglink";
-    download.textContent = t("claim.downloadConfirmation");
-    download.addEventListener("click", () =>
-      downloadActivationConfirmation(body.confirmation, items),
-    );
-    msg.appendChild(download);
-  }
-
-  async function doInstantActivation(ev, options = {}) {
-    if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
-    const button = document.getElementById("ppActivateBtn");
-    const consent = document.getElementById("ppClaimConsent");
-    const receiptButton = document.getElementById("ppClaimBtn");
-    const receiptInput = document.getElementById("ppClaimCode");
-    const receiptMessage = document.getElementById("ppClaimMsg");
-    if (!button) return;
-    if (receiptMessage) receiptMessage.hidden = true;
-    if (!consent || !consent.checked) {
-      setClaimMessage(t("claim.consentRequired"), "err");
-      consent?.focus();
-      return;
-    }
-    const allowRelogin = options.allowRelogin !== false;
-    const token = storedToken();
-    if (!token) {
-      if (allowRelogin) login({ resumeActivation: true });
-      else
-        setClaimAction(t("claim.loginAgain"), t("panel.login"), () =>
-          login({ resumeActivation: true }),
-        );
-      return;
-    }
-
-    const previous = button.textContent;
-    button.disabled = true;
-    if (receiptButton) receiptButton.disabled = true;
-    if (receiptInput) receiptInput.disabled = true;
-    button.textContent = t("claim.instantWorking");
-    try {
-      const res = await fetch(PREMIUM_API_BASE + "/api/activate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-        body: JSON.stringify({
-          termsAccepted: true,
-          termsVersion: ACTIVATION_TERMS_VERSION,
-        }),
-      });
-      let body = {};
-      try {
-        body = await res.json();
-      } catch {}
-      if (res.status === 200 && body.ok === true) {
-        renderActivationSuccess(body);
-        return;
-      }
-      const error = body && typeof body.error === "string" ? body.error : "";
-      if (res.status === 403 && error === "no_email_scope") {
-        if (allowRelogin) login({ resumeActivation: true });
-        else
-          setClaimAction(t("claim.loginAgain"), t("panel.login"), () =>
-            login({ resumeActivation: true }),
-          );
-        return;
-      }
-      if (res.status === 401) {
-        try {
-          sessionStorage.removeItem(TOK_KEY);
-          sessionStorage.removeItem(NAV_USER_KEY);
-        } catch {}
-        setClaimAction(t("claim.loginAgain"), t("panel.login"), () =>
-          login({ resumeActivation: true }),
-        );
-        return;
-      }
-      if (res.status === 404) {
-        setClaimMessage(t("claim.activationNotFound"), "err");
-        receiptInput?.focus();
-        return;
-      }
-      if (res.status === 429) {
-        setClaimMessage(t("claim.ratelimited"), "err");
-        return;
-      }
-      if (res.status === 422 && error === "email_missing") {
-        setClaimMessage(t("claim.emailMissing"), "err");
-        return;
-      }
-      if (res.status === 422 && error === "email_unverified") {
-        setClaimMessage(t("claim.emailUnverified"), "err");
-        return;
-      }
-      if (res.status === 503) {
-        setClaimMessage(t("claim.serviceUnavailable"), "err");
-        return;
-      }
-      if (error === "bad_terms_version") {
-        setClaimMessage(t("claim.resumeExpired"), "err");
-        return;
-      }
-      setClaimMessage(t("claim.error"), "err");
-    } catch {
-      setClaimMessage(t("claim.serviceUnavailable"), "err");
-    } finally {
-      button.disabled = false;
-      if (receiptButton) receiptButton.disabled = false;
-      if (receiptInput) receiptInput.disabled = false;
-      button.textContent = previous;
-    }
-  }
-
-  // Submete o código da transação a POST {API_BASE}/api/link (autenticado com o token do OAuth).
-  // 200 => ativado (recarrega o painel); 400 "use_receipt_code" => colaram um email em vez do
-  // código (plano 021: o email já não é aceite como prova de posse); 404 => código não
-  // encontrado; 429 => rate-limit; 401 => token expirou (re-login). Nunca expõe qual código é
-  // válido (404 genérico do backend).
-  async function doClaim(ev) {
-    ev.preventDefault();
-    const input = document.getElementById("ppClaimCode");
-    const btn = document.getElementById("ppClaimBtn");
-    const msg = document.getElementById("ppClaimMsg");
-    const instantMessage = document.getElementById("ppInstantMsg");
-    const consent = document.getElementById("ppClaimConsent");
-    if (!input || !btn) return;
-    if (instantMessage) instantMessage.hidden = true;
-    const code = (input.value || "").trim();
-    const setMsg = (text, kind) => {
-      if (!msg) return;
-      msg.hidden = false;
-      msg.textContent = text;
-      msg.className = "ppanel__claimmsg" + (kind ? " is-" + kind : "");
-    };
-    if (!code) {
-      setMsg(t("claim.receiptRequired"), "err");
-      input.focus();
-      return;
-    }
-    // O Ref do recibo (`Ref: S-M1X823C9FW`) e a unica coisa com ar de codigo no email do Ko-fi, e
-    // nunca casa com nada: o webhook do Ko-fi nao envia esse campo. Deixa-lo ir ao servidor da um
-    // 404 que a pessoa nao consegue accionar — e ela pagou mesmo. Apanha-se aqui, ANTES do fetch,
-    // e abre-se a ajuda — que agora pede o EMAIL (o Ref nao serve para ninguem procurar).
-    if (REF_RE.test(code)) {
-      setMsg(t("claim.help.refPasted"), "err");
-      openClaimHelp();
-      return;
-    }
-    // Sem consentimento nao se entrega. Se falhassemos ABERTO aqui, activavamos o passe sem a
-    // pessoa ter reconhecido nada — e o direito de retratacao ficava de pe, que e exactamente o
-    // que isto existe para evitar.
-    if (!consent || !consent.checked) {
-      setMsg(t("claim.consentRequired"), "err");
-      return;
-    }
-    const tok = storedToken();
-    if (!tok) {
-      login();
-      return;
-    }
-    const prev = btn.textContent;
-    btn.disabled = true;
-    input.disabled = true;
-    btn.textContent = t("claim.working");
-    try {
-      const res = await fetch(PREMIUM_API_BASE + "/api/link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + tok },
-        body: JSON.stringify({ code }),
-      });
-      if (res.ok) {
-        setMsg(t("claim.ok"), "ok");
-        input.value = "";
-        window.setTimeout(loadPanel, 1200); // reflete o novo estado no painel
-        return;
-      }
-      if (res.status === 401) {
-        login();
-        return;
-      }
-      if (res.status === 429) {
-        setMsg(t("claim.ratelimited"), "err");
-        return;
-      }
-      if (res.status === 404) {
-        setMsg(t("claim.notfound"), "err");
-        return;
-      }
-      let errCode = "";
-      try {
-        const errBody = await res.json();
-        if (errBody && typeof errBody.error === "string") errCode = errBody.error;
-      } catch {
-        /* corpo sem JSON válido — cai no erro genérico abaixo */
-      }
-      setMsg(errCode === "use_receipt_code" ? t("claim.useReceiptCode") : t("claim.error"), "err");
-    } catch {
-      setMsg(t("claim.error"), "err");
-    } finally {
-      btn.disabled = false;
-      input.disabled = false;
-      btn.textContent = prev;
-    }
-  }
-
-  let purchaseActivationOpener = null;
-
-  // Move the purchase flow to <body>. The account card uses backdrop-filter, which would trap a
-  // fixed descendant inside the card instead of letting it cover the viewport.
-  function mountPurchaseActivation(el) {
-    const modal = el.querySelector("#activate-purchase");
-    if (!modal) return;
-    document.body.appendChild(modal);
-  }
-
-  function openPurchaseActivation() {
-    const modal = document.getElementById("activate-purchase");
-    if (!modal) return;
-    purchaseActivationOpener = document.activeElement;
-    modal.hidden = false;
-    document.body.classList.add("is-claim-open");
-    document.getElementById("ppClaimClose")?.focus();
-  }
-
-  function closePurchaseActivation() {
-    const modal = document.getElementById("activate-purchase");
-    if (!modal || modal.hidden) return;
-    modal.hidden = true;
-    document.body.classList.remove("is-claim-open");
-    if (
-      purchaseActivationOpener &&
-      typeof purchaseActivationOpener.focus === "function"
-    ) {
-      purchaseActivationOpener.focus();
-    }
-    purchaseActivationOpener = null;
   }
 
   let logoutConfirmOpener = null;
@@ -1514,49 +1052,6 @@
     logoutConfirmOpener = null;
   }
 
-  // Quem abriu o modal, para lhe devolver o foco ao fechar. Sem isto, quem navega por teclado
-  // volta ao topo do documento e tem de refazer o caminho todo ate ao cartao.
-  let claimHelpOpener = null;
-
-  // O modal vive no <body>, NAO dentro do #premiumPanel que o desenha. Nao e preferencia: o
-  // .premium-panel tem `transform` e `backdrop-filter`, e qualquer um deles faz do painel o
-  // containing block dos descendentes `position: fixed`. La dentro, o modal ficava preso ao
-  // painel — media 836px de largura no meio da pagina em vez de cobrir o ecra, e o blur so tapava
-  // o proprio painel. Verificado no browser; nenhum teste de string apanha isto.
-  //
-  // renderPanel reescreve o innerHTML do painel a cada loadPanel, por isso o modal e re-montado
-  // aqui a seguir: substitui-se o anterior para nao acumular copias no body, e os handlers
-  // ligam-se por document.getElementById (o modal ja nao esta dentro de `el`).
-  function mountClaimHelp(el) {
-    document.getElementById("ppClaimHelp")?.remove();
-    if (!el.querySelector("#ppClaimHelpOpen")) return; // sem cartao de activacao, sem modal
-    document.body.insertAdjacentHTML("beforeend", claimHelpModal());
-    document.getElementById("ppClaimHelpClose")?.addEventListener("click", closeClaimHelp);
-    document.getElementById("ppClaimHelpBackdrop")?.addEventListener("click", closeClaimHelp);
-    document.getElementById("ppClaimHelpForm")?.addEventListener("submit", sendClaimHelp);
-  }
-
-  function openClaimHelp() {
-    const modal = document.getElementById("ppClaimHelp");
-    if (!modal) return;
-    claimHelpOpener = document.activeElement;
-    modal.hidden = false;
-    document.body.classList.add("is-modal-open");
-    // O foco entra na caixa (nao no input): quem usa leitor de ecra ouve o titulo e os dois
-    // passos antes do campo, que e a ordem que explica o campo. Nao se pre-preenche nada — o campo
-    // e o EMAIL do Ko-fi, e o que a pessoa possa ter colado antes (um Ref) nao e um email.
-    document.getElementById("ppClaimHelpBox")?.focus();
-  }
-
-  function closeClaimHelp() {
-    const modal = document.getElementById("ppClaimHelp");
-    if (!modal || modal.hidden) return;
-    modal.hidden = true;
-    document.body.classList.remove("is-modal-open");
-    if (claimHelpOpener && typeof claimHelpOpener.focus === "function") claimHelpOpener.focus();
-    claimHelpOpener = null;
-  }
-
   // Esc fecha. Registado UMA vez no documento (nao por render) — o painel volta a desenhar-se a
   // cada loadPanel e um listener por render acumulava-se em silencio.
   document.addEventListener("keydown", (ev) => {
@@ -1583,115 +1078,12 @@
       closeLogoutConfirm();
       return;
     }
-    const help = document.getElementById("ppClaimHelp");
-    if (help && !help.hidden) {
-      closeClaimHelp();
-      return;
-    }
-    if (document.getElementById("vozenBillingModal")) {
-      closeBillingCheckout();
-      return;
-    }
-    closePurchaseActivation();
+    if (document.getElementById("vozenBillingModal")) closeBillingCheckout();
   });
-
-  // Um UUID em qualquer forma (codigo solto, ou dentro de um link de recibo). Se aparecer no campo
-  // de email, a pessoa colou o codigo/link no sitio errado — e ativa-se na mesma pela caixa
-  // principal, sem ela ter de perceber a diferenca.
-  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-
-  // Quando a notificacao nao sai (API em baixo, webhook por configurar), a pessoa nao pode ficar
-  // sem saida: mostra-se a mensagem ja pronta para ela colar no suporte, com o email la dentro. E
-  // o mesmo trabalho, feito a mao — mas ela sai daqui com alguma coisa.
-  function showClaimHelpFallback(setMsg, email) {
-    setMsg(t("claim.help.sendError"), "err");
-    const box = document.getElementById("ppClaimHelpMsg");
-    if (!box) return;
-    const pre = document.createElement("pre");
-    pre.className = "ppmodal__copy";
-    pre.textContent = `Vozen: I can't activate my purchase. Ko-fi email: ${email}`;
-    box.appendChild(pre);
-  }
-
-  // Envia (Discord ID via token, email do Ko-fi) para o dono activar a mao. O email e pista de
-  // procura, NAO prova (ver claimHelpModal). Se o endpoint falhar, mostra uma mensagem pronta a
-  // copiar: a pessoa nunca fica sem saida por a nossa API estar em baixo.
-  async function sendClaimHelp(ev) {
-    ev.preventDefault();
-    const input = document.getElementById("ppClaimHelpEmail");
-    const btn = document.getElementById("ppClaimHelpSend");
-    const msg = document.getElementById("ppClaimHelpMsg");
-    if (!input || !btn) return;
-    const value = (input.value || "").trim();
-    const setMsg = (text, kind) => {
-      if (!msg) return;
-      msg.hidden = false;
-      msg.textContent = text;
-      msg.className = "ppanel__claimmsg" + (kind ? " is-" + kind : "");
-    };
-    if (!value) return;
-    // Colou aqui o codigo verdadeiro (ou o link do recibo)? Manda-se de volta para a caixa
-    // principal e ativa-se — a pessoa nao tem de saber a diferenca.
-    if (UUID_RE.test(value)) {
-      const main = document.getElementById("ppClaimCode");
-      if (main) {
-        main.value = value;
-        closeClaimHelp();
-        main.focus();
-        return;
-      }
-    }
-    // Nao e um email? Diz-lho antes de enviar — o dono nao pode ficar com um ping inutil.
-    if (!/^[^@\s]+@[^@\s]+$/.test(value)) {
-      setMsg(t("claim.help.notEmail"), "err");
-      return;
-    }
-    const tok = storedToken();
-    if (!tok) {
-      login();
-      return;
-    }
-    const prev = btn.textContent;
-    btn.disabled = true;
-    input.disabled = true;
-    btn.textContent = t("claim.working");
-    try {
-      const res = await fetch(PREMIUM_API_BASE + "/api/claim-help", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + tok },
-        body: JSON.stringify({ email: value }),
-      });
-      if (res.ok) {
-        setMsg(t("claim.help.sent"), "ok");
-        return;
-      }
-      if (res.status === 401) {
-        login();
-        return;
-      }
-      if (res.status === 429) {
-        setMsg(t("claim.ratelimited"), "err");
-        return;
-      }
-      showClaimHelpFallback(setMsg, value);
-    } catch {
-      showClaimHelpFallback(setMsg, value);
-    } finally {
-      btn.disabled = false;
-      input.disabled = false;
-      btn.textContent = prev;
-    }
-  }
 
   function renderPanel() {
     const el = document.getElementById("premiumPanel");
     if (!el) return;
-    const previousPurchaseModal = document.getElementById("activate-purchase");
-    if (previousPurchaseModal && !el.contains(previousPurchaseModal)) {
-      previousPurchaseModal.remove();
-      document.body.classList.remove("is-claim-open");
-      purchaseActivationOpener = null;
-    }
     if (panelState.mode === "hidden") {
       el.hidden = true;
       el.innerHTML = "";
@@ -1720,15 +1112,6 @@
     byId("ppLogin")?.addEventListener("click", login);
     byId("ppLogout")?.addEventListener("click", openLogoutConfirm);
     byId("ppRetry")?.addEventListener("click", loadPanel);
-    byId("ppActivateBtn")?.addEventListener("click", doInstantActivation);
-    byId("ppClaimForm")?.addEventListener("submit", doClaim);
-    byId("ppClaimHelpOpen")?.addEventListener("click", () => openClaimHelp(""));
-    byId("ppClaimClose")?.addEventListener("click", closePurchaseActivation);
-    byId("activate-purchase")?.addEventListener("click", (ev) => {
-      if (ev.target === ev.currentTarget) closePurchaseActivation();
-    });
-    mountClaimHelp(el);
-    mountPurchaseActivation(el);
     mountLogoutConfirm(el);
     el.querySelector(".ppanel__id")?.addEventListener("click", async (ev) => {
       const btn = ev.currentTarget;
@@ -1746,10 +1129,6 @@
       } catch {}
     });
   }
-
-  document
-    .getElementById("accountActivateOpen")
-    ?.addEventListener("click", openPurchaseActivation);
 
   const planDialog = document.getElementById("planChangeDialog");
   if (planDialog) {
