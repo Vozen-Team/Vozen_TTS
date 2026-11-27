@@ -287,7 +287,14 @@ impl<R: PiperRunner> PiperEngine<R> {
         // matching the legacy MultiSegmentEngine's never-drop-content rule.
         match self.synth_segments(request, segments).await {
             Ok(path) => Ok(path),
-            Err(_) => self.synth_single(request).await,
+            Err(_) => {
+                // Cache the base-voice fallback under its own single-voice key. Writing it under
+                // the multi-voice key would turn one transient segment failure into a permanent
+                // wrong-voice cache hit.
+                let mut base = request.clone();
+                base.segments = None;
+                self.synth_single(&base).await
+            }
         }
     }
 
@@ -299,6 +306,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         let destination = self.cache_dir.join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         // Keep the work queue bounded by the same provider semaphore used by single requests.
@@ -346,6 +354,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         let destination = self.cache_dir.join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
 
@@ -357,6 +366,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         // Check again after waiting: another request may have completed this exact cache key.
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         self.metrics.record_cache_miss();
@@ -365,16 +375,24 @@ impl<R: PiperRunner> PiperEngine<R> {
             .runner
             .run(&model, &temporary, &request.text, request.speed)
             .await;
-        if result.is_ok() && !non_empty_file(&temporary).await? {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(TtsError::EmptyOutput);
+        let prepared = async {
+            result?;
+            if !non_empty_file(&temporary).await? {
+                return Err(TtsError::EmptyOutput);
+            }
+            if request.lead_silence_ms > 0 {
+                let wav = tokio::fs::read(&temporary).await?;
+                let prefixed =
+                    prepend_silence_wav(&wav, request.lead_silence_ms).map_err(TtsError::Wav)?;
+                tokio::fs::write(&temporary, prefixed).await?;
+            }
+            Ok::<(), TtsError>(())
         }
-        result?;
-        if request.lead_silence_ms > 0 {
-            let wav = tokio::fs::read(&temporary).await?;
-            let prefixed =
-                prepend_silence_wav(&wav, request.lead_silence_ms).map_err(TtsError::Wav)?;
-            tokio::fs::write(&temporary, prefixed).await?;
+        .await;
+        // The temporary is a dot-file that eviction skips, so every failure must remove it here.
+        if let Err(error) = prepared {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
         }
         // A simultaneous matching request can win the race. Its immutable cache result is valid.
         match tokio::fs::rename(&temporary, &destination).await {
@@ -402,6 +420,7 @@ impl<R: PiperRunner> PiperEngine<R> {
         tokio::fs::create_dir_all(&self.cache_dir).await?;
         if non_empty_file(&destination).await? {
             self.metrics.record_cache_hit();
+            touch_cached(&destination).await;
             return Ok(destination);
         }
         let temporary = self.cache_dir.join(format!(".{}.wav", Uuid::new_v4()));
@@ -440,6 +459,20 @@ fn single_segment_request(
         emphasis_source: None,
         lead_silence_ms: 0,
     }
+}
+
+/// Marks a cache hit as the newest entry. Eviction removes the oldest files by mtime, and a hit's
+/// path may already sit in a Songbird queue (which opens files lazily), so a frequently used file
+/// must not look old. Best-effort: a failure only weakens the eviction order.
+pub(crate) async fn touch_cached(path: &Path) {
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(SystemTime::now()))
+    })
+    .await;
 }
 
 /// Keeps only the oldest `max_files` completed WAVs. Cleanup is deliberately best-effort: cache
@@ -504,7 +537,15 @@ fn cache_key(request: &SynthRequest) -> String {
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    match &request.segments {
+    hash_segments(&mut digest, request.segments.as_deref());
+    digest.update(request.lead_silence_ms.to_be_bytes());
+    format!("{:x}", digest.finalize())
+}
+
+/// Keeps single-voice and multi-voice renderings of the same joined text in separate cache
+/// files. Every provider's cache key must include it.
+pub(crate) fn hash_segments(digest: &mut Sha256, segments: Option<&[vozen_core::SpeechSegment]>) {
+    match segments {
         Some(segments) => {
             digest.update([1]);
             digest.update((segments.len() as u64).to_be_bytes());
@@ -517,8 +558,6 @@ fn cache_key(request: &SynthRequest) -> String {
         }
         None => digest.update([0]),
     }
-    digest.update(request.lead_silence_ms.to_be_bytes());
-    format!("{:x}", digest.finalize())
 }
 
 /// Piper's `length_scale` runs inversely to the user-facing speed. Clamp avoids a malformed
@@ -743,6 +782,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn segment_fallback_is_cached_apart_so_a_transient_failure_does_not_stick() {
+        let root = temp_dir("segment-fallback-key");
+        let models = root.join("models");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("base model");
+        let runner = Arc::new(FakeRunner {
+            calls: AtomicUsize::new(0),
+            bytes: wav_concat::silence_wav(1),
+        });
+        let engine = PiperEngine::new(runner.clone(), &models, root.join("cache"), 1);
+        let mut segmented = request();
+        segmented.text = "olá hello".into();
+        segmented.segments = Some(vec![
+            vozen_core::SpeechSegment {
+                text: "olá".into(),
+                model: "pt_PT-tugao-medium".into(),
+            },
+            vozen_core::SpeechSegment {
+                text: "hello".into(),
+                model: "en_US-amy-medium".into(),
+            },
+        ]);
+        let mut base = segmented.clone();
+        base.segments = None;
+
+        let fallback = engine.synth(&segmented).await.expect("fallback");
+        assert_eq!(
+            fallback.file_name().and_then(|name| name.to_str()),
+            Some(format!("{}.wav", cache_key(&base)).as_str())
+        );
+
+        // Once the missing voice is available, the multi-voice rendering is produced instead of
+        // the earlier fallback being served from the cache.
+        tokio::fs::write(models.join("pt_PT-tugao-medium.onnx"), b"model")
+            .await
+            .expect("segment model");
+        let recovered = engine.synth(&segmented).await.expect("multi-voice");
+        assert_eq!(
+            recovered.file_name().and_then(|name| name.to_str()),
+            Some(format!("{}.wav", cache_key(&segmented)).as_str())
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    struct FailingRunner;
+
+    #[async_trait]
+    impl PiperRunner for FailingRunner {
+        async fn run(
+            &self,
+            _model: &Path,
+            output: &Path,
+            _text: &str,
+            _speed: f64,
+        ) -> Result<(), TtsError> {
+            // Piper may already have written part of its output before it fails or times out.
+            tokio::fs::write(output, b"RIFF partial").await?;
+            Err(TtsError::ProcessFailed)
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_synthesis_leaves_no_temporary_files_behind() {
+        let root = temp_dir("temporary-cleanup");
+        let models = root.join("models");
+        let cache = root.join("cache");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("model");
+        let engine = PiperEngine::new(Arc::new(FailingRunner), &models, &cache, 1);
+        assert!(engine.synth(&request()).await.is_err());
+        let mut entries = tokio::fs::read_dir(&cache).await.expect("cache dir");
+        let leftover = entries.next_entry().await.expect("entry");
+        assert!(
+            leftover.is_none(),
+            "unexpected leftover file {:?}",
+            leftover.map(|entry| entry.file_name())
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
     async fn caches_non_empty_wavs_and_rejects_empty_outputs() {
         let root = temp_dir("cache");
         let models = root.join("models");
@@ -855,6 +979,36 @@ mod tests {
         let parsed = parse_wav(&delayed_wav).expect("parsed");
         assert_eq!(parsed.data.len(), 44 + 44_100);
         assert!(parsed.data[..44_100].iter().all(|sample| *sample == 0));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn a_cache_hit_becomes_the_newest_entry_for_eviction() {
+        let root = temp_dir("cache-touch");
+        let models = root.join("models");
+        tokio::fs::create_dir_all(&models).await.expect("models");
+        tokio::fs::write(models.join("en_US-amy-medium.onnx"), b"model")
+            .await
+            .expect("model");
+        let runner = Arc::new(FakeRunner {
+            calls: AtomicUsize::new(0),
+            bytes: b"wav".to_vec(),
+        });
+        let engine = PiperEngine::new(runner.clone(), &models, root.join("cache"), 1);
+        let cached = engine.synth(&request()).await.expect("first");
+        // Older than "now" but well inside the 7-day retention window, so it is still a hit.
+        let long_ago = SystemTime::now() - Duration::from_secs(60 * 60);
+        std::fs::File::options()
+            .write(true)
+            .open(&cached)
+            .and_then(|file| file.set_modified(long_ago))
+            .expect("age the cache entry");
+        assert_eq!(engine.synth(&request()).await.expect("hit"), cached);
+        assert_eq!(runner.calls.load(Ordering::Relaxed), 1);
+        let modified = std::fs::metadata(&cached)
+            .and_then(|metadata| metadata.modified())
+            .expect("mtime");
+        assert!(modified > long_ago + Duration::from_secs(60));
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

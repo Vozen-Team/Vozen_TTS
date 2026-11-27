@@ -1,11 +1,10 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::vote_reward::VOTE_REWARD_MS;
 use crate::{SqliteStore, StoreError};
 
 /// Milliseconds in a billing day. This matches the Node subscription contract exactly.
 pub const DAY_MS: i64 = 86_400_000;
-/// The current Top.gg Plus reward duration. It is an existing entitlement source, not a payment.
-pub const VOTE_REWARD_MS: i64 = 48 * 60 * 60 * 1_000;
 
 // Stripe's paid projection is separate from manual/Ko-fi grants. Legacy aggregates have no
 // subscription provenance: retain their original paid-through time rather than attributing

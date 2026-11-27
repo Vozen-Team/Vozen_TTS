@@ -456,7 +456,7 @@ mod tests {
         }
         let guard = store.lock().unwrap();
         assert_eq!(guard.giveaways("100").unwrap()[0].entries, 1);
-        assert_eq!(guard.giveaway_candidates(id).unwrap().len(), 1);
+        assert_eq!(guard.giveaway_candidates(id, true).unwrap().len(), 1);
     }
     #[tokio::test]
     async fn three_project_votes_are_authenticated_capped_and_do_not_share_plus_rewards() {

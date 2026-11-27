@@ -82,7 +82,10 @@ pub use pronunciation::{
     USER_PRON_LIMIT_PREMIUM,
 };
 pub use runtime_batch::{RuntimeBatchBuffer, RuntimeBatchEvent};
-pub use runtime_outbox::{RuntimeOutboxBatch, RuntimeOutboxEnqueue, RuntimeOutboxMetrics};
+pub use runtime_outbox::{
+    MAX_RUNTIME_OUTBOX_PAYLOAD_BYTES, RuntimeOutboxBatch, RuntimeOutboxEnqueue,
+    RuntimeOutboxMetrics,
+};
 pub use stripe::{
     StripeEventApplyOutcome, StripeEventInput, StripePaidPlan, StripeSubscription,
     StripeSubscriptionInput,

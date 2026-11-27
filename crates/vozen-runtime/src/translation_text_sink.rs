@@ -459,49 +459,64 @@ impl TranslationTextGatewaySink {
                     .respond_ephemeral(context, command, "That locale is not supported.")
                     .await;
             }
-            if !self
+            // The channel checks below make several sequential Discord requests; acknowledge
+            // first so a slow API cannot miss the 3-second interaction deadline.
+            command
+                .defer_ephemeral(context)
+                .await
+                .map_err(|_| GatewayEventDispatchError)?;
+            let mappable = self
                 .channels_can_be_mapped(
                     context,
                     command,
                     *source_channel_id,
                     *destination_channel_id,
                 )
-                .await?
-            {
-                return self
-                    .respond_ephemeral(
-                        context,
-                        command,
-                        "Both channels must be distinct text channels that Vozen can view; it must also be able to send in the destination.",
-                    )
-                    .await;
-            }
-            let guild_id = command
-                .guild_id
-                .ok_or(GatewayEventDispatchError)?
-                .get()
-                .to_string();
-            let result = self
-                .store
-                .lock()
-                .map_err(|_| GatewayEventDispatchError)?
-                .upsert_translation_mapping(&TranslationMapping {
-                    guild_id,
-                    source_channel_id: source_channel_id.to_string(),
-                    destination_channel_id: destination_channel_id.to_string(),
-                    target_locale: target_locale.clone(),
-                });
-            let content = match result {
-                Ok(()) => format!(
-                    "Mapping saved: <#{}> -> <#{}> ({}).",
-                    source_channel_id, destination_channel_id, target_locale
-                ),
-                Err(StoreError::TranslationCycle) => {
-                    "That mapping would create a translation loop and was rejected.".to_owned()
+                .await;
+            let content = match mappable {
+                Err(_) => {
+                    "Vozen could not check those channels right now. Please try again.".to_owned()
                 }
-                Err(_) => return Err(GatewayEventDispatchError),
+                Ok(false) => "Both channels must be distinct text channels that Vozen can view; it must also be able to send in the destination.".to_owned(),
+                Ok(true) => {
+                    let guild_id = command
+                        .guild_id
+                        .ok_or(GatewayEventDispatchError)?
+                        .get()
+                        .to_string();
+                    let result = self
+                        .store
+                        .lock()
+                        .map_err(|_| GatewayEventDispatchError)?
+                        .upsert_translation_mapping(&TranslationMapping {
+                            guild_id,
+                            source_channel_id: source_channel_id.to_string(),
+                            destination_channel_id: destination_channel_id.to_string(),
+                            target_locale: target_locale.clone(),
+                        });
+                    match result {
+                        Ok(()) => format!(
+                            "Mapping saved: <#{}> -> <#{}> ({}).",
+                            source_channel_id, destination_channel_id, target_locale
+                        ),
+                        Err(StoreError::TranslationCycle) => {
+                            "That mapping would create a translation loop and was rejected."
+                                .to_owned()
+                        }
+                        Err(_) => "The mapping could not be saved. Please try again.".to_owned(),
+                    }
+                }
             };
-            return self.respond_ephemeral(context, command, content).await;
+            return command
+                .edit_response(
+                    context,
+                    EditInteractionResponse::new()
+                        .content(content)
+                        .allowed_mentions(no_mentions()),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|_| GatewayEventDispatchError);
         }
         let content = self.store_translation_admin(command, &admin)?;
         self.respond_ephemeral(context, command, content).await

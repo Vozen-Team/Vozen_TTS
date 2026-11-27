@@ -474,6 +474,33 @@ impl VoicePreferenceGatewaySink {
         Ok(())
     }
 
+    async fn respond_config_expired(
+        &self,
+        context: &Context,
+        component: &ComponentInteraction,
+        locale: &str,
+        guild_locale: Option<&str>,
+    ) -> Result<bool, GatewayEventDispatchError> {
+        let content = self.message(
+            "voice.config.expired",
+            locale,
+            guild_locale,
+            &BTreeMap::new(),
+        )?;
+        component
+            .create_response(
+                context,
+                CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new()
+                        .content(content)
+                        .components(Vec::new()),
+                ),
+            )
+            .await
+            .map_err(|_| GatewayEventDispatchError)?;
+        Ok(true)
+    }
+
     async fn config_component(
         &self,
         context: &Context,
@@ -491,7 +518,16 @@ impl VoicePreferenceGatewaySink {
             .get(session_id)
             .cloned();
         let Some(mut session) = session else {
-            return Ok(true);
+            // The panel outlived its session (TTL prune, eviction or restart). Say so instead of
+            // letting Discord report a failed interaction.
+            return self
+                .respond_config_expired(
+                    context,
+                    &component,
+                    &component.locale,
+                    component.guild_locale.as_deref(),
+                )
+                .await;
         };
         let guild_id = component.guild_id.map(|id| id.get().to_string());
         if session.owner_user_id != component.user.id.get().to_string()
@@ -506,24 +542,14 @@ impl VoicePreferenceGatewaySink {
                 .lock()
                 .map_err(|_| GatewayEventDispatchError)?
                 .remove(session_id);
-            let content = self.message(
-                "voice.config.expired",
-                &session.locale,
-                session.guild_locale.as_deref(),
-                &BTreeMap::new(),
-            )?;
-            component
-                .create_response(
+            return self
+                .respond_config_expired(
                     context,
-                    CreateInteractionResponse::UpdateMessage(
-                        CreateInteractionResponseMessage::new()
-                            .content(content)
-                            .components(Vec::new()),
-                    ),
+                    &component,
+                    &session.locale,
+                    session.guild_locale.as_deref(),
                 )
-                .await
-                .map_err(|_| GatewayEventDispatchError)?;
-            return Ok(true);
+                .await;
         }
 
         self.config_sessions

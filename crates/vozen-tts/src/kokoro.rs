@@ -255,7 +255,10 @@ impl KokoroEngine {
         .to_string()
             + "\n";
 
-        let result = async {
+        // The outer error restarts the sidecar (I/O, timeout, malformed or out-of-step replies).
+        // The inner error is a well-formed `{"ok": false}` for this one request: the sidecar is
+        // built to survive those, so it stays warm instead of reloading the model.
+        let result: Result<Result<(), TtsError>, TtsError> = async {
             let process = guard.as_mut().ok_or(TtsError::KokoroProcess)?;
             process
                 .stdin
@@ -269,20 +272,24 @@ impl KokoroEngine {
                 .map_err(|_| TtsError::KokoroProcess)?;
             let line = read_line(&mut process.stdout, self.options.synth_timeout).await?;
             let response = parse_response(&line).map_err(|_| TtsError::KokoroResponse)?;
-            if response.ok == Some(true) && response.out.is_some() {
-                Ok(())
-            } else {
-                Err(TtsError::KokoroResponse)
+            match response.ok {
+                Some(false) => Ok(Err(TtsError::KokoroResponse)),
+                // A reply naming another output path means stdout is out of step with requests.
+                Some(true) if response.out.as_deref() == output.to_str() => Ok(Ok(())),
+                _ => Err(TtsError::KokoroResponse),
             }
         }
         .await;
 
-        if result.is_err()
-            && let Some(process) = guard.take()
-        {
-            process.kill().await;
+        match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(process) = guard.take() {
+                    process.kill().await;
+                }
+                Err(error)
+            }
         }
-        result
     }
 
     pub async fn synth(&self, request: &SynthRequest) -> Result<PathBuf, TtsError> {
@@ -311,6 +318,7 @@ impl KokoroEngine {
             .cache_dir
             .join(format!("{}.wav", cache_key(request)));
         if non_empty_file(&destination).await? {
+            crate::touch_cached(&destination).await;
             return Ok(destination);
         }
         let mut wavs = Vec::with_capacity(segments.len());
@@ -352,6 +360,7 @@ impl KokoroEngine {
         let key = cache_key(request);
         let destination = self.options.cache_dir.join(format!("{key}.wav"));
         if non_empty_file(&destination).await? {
+            crate::touch_cached(&destination).await;
             return Ok(destination);
         }
         tokio::fs::create_dir_all(&self.options.cache_dir).await?;
@@ -376,6 +385,8 @@ impl KokoroEngine {
         let bytes = tokio::fs::read(&temporary).await?;
         let _ = tokio::fs::remove_file(&temporary).await;
         parse_wav(&bytes)?;
+        // The cache key includes `lead_silence_ms`, so the cached file must contain it too.
+        let bytes = prepend_silence_wav(&bytes, request.lead_silence_ms)?;
         write_cached(
             &self.options.cache_dir,
             destination,
@@ -427,6 +438,7 @@ fn cache_key(request: &SynthRequest) -> String {
     digest.update((request.model.len() as u64).to_be_bytes());
     digest.update(request.model.as_bytes());
     digest.update(request.speed.to_bits().to_be_bytes());
+    crate::hash_segments(&mut digest, request.segments.as_deref());
     digest.update(request.lead_silence_ms.to_be_bytes());
     format!("{:x}", digest.finalize())
 }
@@ -449,6 +461,7 @@ async fn write_cached(
 ) -> Result<PathBuf, TtsError> {
     tokio::fs::create_dir_all(directory).await?;
     if non_empty_file(&destination).await? {
+        crate::touch_cached(&destination).await;
         return Ok(destination);
     }
     let temporary = directory.join(format!(".{}.{}.tmp", std::process::id(), Uuid::new_v4()));
@@ -532,5 +545,33 @@ mod tests {
     fn language_key_matches_prefix_contract() {
         assert_eq!(language_key("fr_FR-voice-medium"), "fr");
         assert_eq!(language_key("voice-without-locale"), "en");
+    }
+
+    #[test]
+    fn multi_voice_and_single_voice_renderings_never_share_a_cache_file() {
+        let single = SynthRequest {
+            text: "olá hello".into(),
+            model: "en_US-amy-medium".into(),
+            asset_path: None,
+            speed: 1.0,
+            engine: vozen_core::SynthesisEngine::Default,
+            gcloud_budget: None,
+            segments: None,
+            single_voice: None,
+            emphasis_source: None,
+            lead_silence_ms: 0,
+        };
+        let mut multi = single.clone();
+        multi.segments = Some(vec![
+            vozen_core::SpeechSegment {
+                text: "olá".into(),
+                model: "pt_PT-tugao-medium".into(),
+            },
+            vozen_core::SpeechSegment {
+                text: "hello".into(),
+                model: "en_US-amy-medium".into(),
+            },
+        ]);
+        assert_ne!(cache_key(&single), cache_key(&multi));
     }
 }

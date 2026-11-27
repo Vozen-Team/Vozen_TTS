@@ -63,8 +63,13 @@ impl SqliteStore {
         let mut backfilled = 0;
         for (user_id, rewarded_at) in legacy_rewards {
             let user_hash = vote_redemption_hash(redemption_secret, &user_id)?;
+            // Only seed users that predate the ledger. A stacked reward stores a `rewarded_at`
+            // that differs from its real grant time, so re-seeding it on every start would add
+            // phantom grants and exhaust the rolling cap early.
             backfilled += transaction.execute(
-                "INSERT OR IGNORE INTO vote_reward_ledger (user_hash, granted_at) VALUES (?1, ?2)",
+                "INSERT INTO vote_reward_ledger (user_hash, granted_at)
+                 SELECT ?1, ?2
+                 WHERE NOT EXISTS (SELECT 1 FROM vote_reward_ledger WHERE user_hash = ?1)",
                 params![user_hash, rewarded_at],
             )?;
         }
@@ -163,7 +168,7 @@ impl SqliteStore {
                 return Ok(TopggVoteRewardResult::DuplicateEvent);
             }
             crate::growth_lifecycle::add_topgg_vote_daily(&transaction, now)?;
-            if let Some(voted_at) = voted_at.filter(|time| *time <= now && *time >= 0) {
+            if let Some(voted_at) = voted_at.and_then(|time| effective_vote_time(time, now)) {
                 insert_giveaway_vote(
                     &transaction,
                     vozen_core::GIVEAWAY_VOTE_BOTS[0].1,
@@ -219,14 +224,13 @@ impl SqliteStore {
         now: i64,
     ) -> Result<usize, StoreError> {
         validate_event_id(event_id)?;
+        let Some(voted_at) = effective_vote_time(voted_at, now) else {
+            return Ok(0);
+        };
         if !vozen_core::GIVEAWAY_VOTE_BOTS
             .iter()
             .any(|(_, id)| *id == bot_id)
-            || user_id.is_empty()
             || user_id.len() > 25
-            || !user_id.bytes().all(|c| c.is_ascii_digit())
-            || voted_at < 0
-            || voted_at > now
         {
             return Ok(0);
         }
@@ -255,6 +259,23 @@ impl SqliteStore {
     }
 }
 
+/// Top.gg and this host can disagree by a few seconds. A vote stamped within the signature
+/// tolerance ahead of `now` counts as cast now; anything further ahead, or negative, is ignored.
+fn effective_vote_time(voted_at: i64, now: i64) -> Option<i64> {
+    if voted_at < 0 || voted_at > now.saturating_add(vozen_core::TOPGG_SIGNATURE_TOLERANCE_MS) {
+        return None;
+    }
+    Some(voted_at.min(now))
+}
+
+/// Giveaway tickets must hold a real Discord snowflake: the draw turns them into `UserId`s,
+/// and serenity rejects zero.
+fn is_giveaway_user_id(user_id: &str) -> bool {
+    !user_id.is_empty()
+        && user_id.bytes().all(|c| c.is_ascii_digit())
+        && user_id.parse::<u64>().is_ok_and(|id| id != 0)
+}
+
 fn insert_giveaway_vote(
     connection: &Connection,
     bot_id: &str,
@@ -263,6 +284,9 @@ fn insert_giveaway_vote(
     voted_at: i64,
     now: i64,
 ) -> Result<usize, StoreError> {
+    if !is_giveaway_user_id(user_id) {
+        return Ok(0);
+    }
     Ok(connection.execute(
         "INSERT OR IGNORE INTO giveaway_vote (giveaway_id,event_id,user_id,voted_at,bot_id)
          SELECT g.id,?1,?2,?3,?5 FROM giveaway g
@@ -525,5 +549,98 @@ mod tests {
                 grants_remaining: VOTE_REWARD_MAX_GRANTS_PER_30_DAYS,
             }
         );
+    }
+
+    const HOUR_MS: i64 = 60 * 60 * 1_000;
+
+    fn ledger_rows(store: &SqliteStore) -> i64 {
+        store
+            .connection()
+            .query_row("SELECT COUNT(*) FROM vote_reward_ledger", [], |row| {
+                row.get(0)
+            })
+            .expect("ledger count")
+    }
+
+    #[test]
+    fn one_vote_grants_exactly_the_published_twenty_four_hours() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        store.claim_vote_reward(USER, NOW, SECRET).expect("grant");
+        assert_eq!(
+            store.user_premium_expiry(USER).expect("expiry"),
+            Some(NOW + 24 * HOUR_MS)
+        );
+        assert!(
+            store
+                .is_user_premium(USER, NOW + 24 * HOUR_MS - 1)
+                .expect("premium")
+        );
+        assert!(
+            !store
+                .is_user_premium(USER, NOW + 24 * HOUR_MS + 1)
+                .expect("expired")
+        );
+    }
+
+    #[test]
+    fn stacked_votes_never_reach_beyond_forty_eight_hours() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        store.claim_vote_reward(USER, NOW, SECRET).expect("first");
+        assert_eq!(
+            store
+                .claim_vote_reward(USER, NOW + 12 * HOUR_MS, SECRET)
+                .expect("second"),
+            VoteRewardResult {
+                granted: true,
+                expires_at: Some(NOW + 48 * HOUR_MS),
+                rate_limited: false,
+            }
+        );
+        assert_eq!(
+            store.user_premium_expiry(USER).expect("expiry"),
+            Some(NOW + 48 * HOUR_MS)
+        );
+    }
+
+    #[test]
+    fn restarts_do_not_add_phantom_grants_for_stacked_rewards() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        store.claim_vote_reward(USER, NOW, SECRET).expect("first");
+        store
+            .claim_vote_reward(USER, NOW + 12 * HOUR_MS, SECRET)
+            .expect("second");
+        assert_eq!(ledger_rows(&store), 2);
+        store
+            .initialize_vote_redemption_ledger(SECRET)
+            .expect("first start");
+        store
+            .initialize_vote_redemption_ledger(SECRET)
+            .expect("second start");
+        assert_eq!(ledger_rows(&store), 2);
+    }
+
+    #[test]
+    fn legacy_rewards_without_ledger_rows_are_seeded_once() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO vote_reward (user_id, rewarded_at) VALUES (?1, ?2)",
+                params![USER, NOW + 12 * HOUR_MS],
+            )
+            .expect("legacy reward");
+        assert_eq!(
+            store
+                .initialize_vote_redemption_ledger(SECRET)
+                .expect("backfill"),
+            1
+        );
+        assert_eq!(
+            store
+                .initialize_vote_redemption_ledger(SECRET)
+                .expect("repeat"),
+            0
+        );
+        assert_eq!(ledger_rows(&store), 1);
     }
 }

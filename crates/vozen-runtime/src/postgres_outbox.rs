@@ -12,8 +12,8 @@ use std::{
 
 use sqlx::PgPool;
 use vozen_store::{
-    GUILD_PURGE_SPECS, PrivacyPurgeKey, PrivacyPurgeSpec, RuntimeBatchBuffer, RuntimeOutboxEnqueue,
-    SqliteStore, USER_ERASE_SPECS,
+    GUILD_PURGE_SPECS, MAX_RUNTIME_OUTBOX_PAYLOAD_BYTES, PrivacyPurgeKey, PrivacyPurgeSpec,
+    RuntimeBatchBuffer, RuntimeOutboxEnqueue, SqliteStore, StoreError, USER_ERASE_SPECS,
 };
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
@@ -38,26 +38,36 @@ async fn persist_buffer(store: &Arc<Mutex<SqliteStore>>, buffer: &RuntimeBatchBu
     let Some(event) = buffer.drain() else {
         return;
     };
-    let payload = event.payload().to_owned();
-    let writer = store.clone();
-    let persisted = tokio::task::spawn_blocking(move || {
-        writer
-            .lock()
-            .map_err(|_| ())?
-            .enqueue_runtime_outbox(RuntimeOutboxEnqueue {
-                batch_id: &format!("runtime-{}", uuid::Uuid::new_v4()),
-                created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
-                payload: &payload,
-            })
-            .map_err(|_| ())
-    })
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .is_some();
-    if !persisted {
-        buffer.restore(event);
+    // An oversized drain is split to fit the outbox. Restoring a batch the outbox can never
+    // accept would only make it larger on every interval and stall all later metrics.
+    for part in event.split(MAX_RUNTIME_OUTBOX_PAYLOAD_BYTES) {
+        let payload = part.payload().to_owned();
+        let writer = store.clone();
+        let persisted = tokio::task::spawn_blocking(move || {
+            writer
+                .lock()
+                .map_err(|_| None)?
+                .enqueue_runtime_outbox(RuntimeOutboxEnqueue {
+                    batch_id: &format!("runtime-{}", uuid::Uuid::new_v4()),
+                    created_at: unix_now_ms(),
+                    payload: &payload,
+                })
+                .map_err(Some)
+        })
+        .await;
+        match persisted {
+            Ok(Ok(())) => {}
+            Ok(Err(Some(StoreError::InvalidRuntimeOutboxPayload))) => {
+                eprintln!("[postgres] dropped a runtime batch the outbox cannot accept");
+            }
+            _ => buffer.restore(part),
+        }
     }
+}
+
+/// Outbox timestamps are Unix milliseconds, matching the replica triggers.
+fn unix_now_ms() -> i64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 async fn flush_once(pool: &PgPool, store: Arc<Mutex<SqliteStore>>) -> Result<(), String> {
@@ -365,6 +375,15 @@ struct SpeechRow {
 mod tests {
     use super::*;
     use vozen_store::RuntimeOutboxEnqueue;
+
+    #[test]
+    fn runtime_batches_are_stamped_in_milliseconds_like_replica_rows() {
+        let expected = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_millis() as i64;
+        assert!((unix_now_ms() - expected).abs() < 5_000);
+    }
 
     #[tokio::test]
     async fn staging_delivery_when_explicitly_requested() {

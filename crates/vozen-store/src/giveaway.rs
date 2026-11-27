@@ -341,16 +341,29 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn giveaway_candidates(&self, id: i64) -> Result<Vec<String>, StoreError> {
+    /// Shuffled tickets for a draw. Helper and Music votes only count while the three-bot card
+    /// is live; otherwise the announcement promises one entry per person via the TTS vote.
+    pub fn giveaway_candidates(
+        &self,
+        id: i64,
+        include_partner_votes: bool,
+    ) -> Result<Vec<String>, StoreError> {
         // Shuffle tickets, then the runtime skips users already selected for this draw.
         let mut stmt = self.connection().prepare("SELECT user_id FROM (
             SELECT user_id,giveaway_id FROM giveaway_entry
-            UNION ALL SELECT user_id,giveaway_id FROM giveaway_vote
+            UNION ALL SELECT user_id,giveaway_id FROM giveaway_vote WHERE ?2 OR bot_id=?3
         ) e WHERE giveaway_id=?1
         AND NOT EXISTS(SELECT 1 FROM giveaway_award a WHERE a.giveaway_id=e.giveaway_id AND a.user_id=e.user_id)
         ORDER BY random()")?;
         Ok(stmt
-            .query_map([id], |r| r.get(0))?
+            .query_map(
+                params![
+                    id,
+                    include_partner_votes,
+                    vozen_core::GIVEAWAY_VOTE_BOTS[0].1
+                ],
+                |r| r.get(0),
+            )?
             .collect::<Result<_, _>>()?)
     }
 
@@ -679,7 +692,7 @@ mod tests {
         db.giveaway_admin("100", action, expired.deadline)
             .unwrap()
             .unwrap();
-        assert_eq!(db.giveaway_candidates(id).unwrap(), vec!["503"]);
+        assert_eq!(db.giveaway_candidates(id, true).unwrap(), vec!["503"]);
         db.giveaway_draw(id, Some(expired.id), &["503".into()], expired.deadline)
             .unwrap();
         let campaigns = db.giveaways("100").unwrap();
@@ -898,6 +911,75 @@ mod tests {
             0
         );
     }
+    #[test]
+    fn partner_votes_only_become_tickets_while_the_three_bot_card_is_live() {
+        let (db, id) = setup("plus");
+        db.connection()
+            .execute(
+                "UPDATE giveaway SET status='open',starts_at=?2 WHERE id=?1",
+                params![id, NOW],
+            )
+            .unwrap();
+        let [(_, tts), (_, helper), _] = vozen_core::GIVEAWAY_VOTE_BOTS;
+        assert_eq!(
+            db.record_giveaway_vote(tts, "tts-1", "601", NOW + 1, NOW + 1)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.record_giveaway_vote(helper, "helper-1", "602", NOW + 1, NOW + 1)
+                .unwrap(),
+            1
+        );
+        let tts_only = db.giveaway_candidates(id, false).unwrap();
+        assert!(tts_only.contains(&"601".to_owned()));
+        assert!(!tts_only.contains(&"602".to_owned()));
+        let all = db.giveaway_candidates(id, true).unwrap();
+        assert!(all.contains(&"601".to_owned()) && all.contains(&"602".to_owned()));
+    }
+
+    #[test]
+    fn slightly_early_vote_timestamps_still_enter_and_invalid_ids_never_do() {
+        let (db, id) = setup("plus");
+        db.connection()
+            .execute(
+                "UPDATE giveaway SET status='open',starts_at=?2 WHERE id=?1",
+                params![id, NOW],
+            )
+            .unwrap();
+        let helper = vozen_core::GIVEAWAY_VOTE_BOTS[1].1;
+        // Top.gg's clock a few seconds ahead of ours: the vote still counts.
+        assert_eq!(
+            db.record_giveaway_vote(helper, "skew", "601", NOW + 3_000, NOW + 1)
+                .unwrap(),
+            1
+        );
+        // Far beyond the signature tolerance: ignored.
+        assert_eq!(
+            db.record_giveaway_vote(helper, "future", "602", NOW + 10 * 60_000, NOW + 1)
+                .unwrap(),
+            0
+        );
+        // Zero is not a Discord user and would panic the draw.
+        assert_eq!(
+            db.record_giveaway_vote(helper, "zero", "0", NOW + 1, NOW + 1)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.record_giveaway_vote(helper, "zeros", "0000", NOW + 1, NOW + 1)
+                .unwrap(),
+            0
+        );
+        let candidates = db.giveaway_candidates(id, true).unwrap();
+        assert!(candidates.contains(&"601".to_owned()));
+        assert!(
+            !candidates
+                .iter()
+                .any(|user| user == "602" || user == "0" || user == "0000")
+        );
+    }
+
     #[test]
     fn refreshing_cards_only_marks_open_giveaways_in_the_support_guild() {
         let (db, id) = setup("plus");

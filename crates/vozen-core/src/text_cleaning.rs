@@ -44,9 +44,8 @@ pub enum MediaKind {
 
 /// Removes content that must not be spoken and converts Discord syntax into readable text.
 pub fn clean_text(raw: &str, options: &CleanTextOptions<'_>) -> String {
-    let mut text = RE_SPOILER.replace_all(raw, " ").into_owned();
-    text = RE_CODE_BLOCK.replace_all(&text, " ").into_owned();
-    text = RE_INLINE_CODE.replace_all(&text, " ").into_owned();
+    let normalized = normalize_input(raw);
+    let mut text = strip_protected(&normalized);
     text = RE_URL.replace_all(&text, " ").into_owned();
     text = RE_ROLE.replace_all(&text, " ").into_owned();
     text = RE_USER
@@ -79,9 +78,7 @@ pub fn clean_text(raw: &str, options: &CleanTextOptions<'_>) -> String {
 
 /// Collects URL announcements after excluding spoilers and code, in the same order as `clean_text`.
 pub fn collect_url_media(raw: &str) -> Vec<MediaKind> {
-    let without_spoilers = RE_SPOILER.replace_all(raw, " ");
-    let without_blocks = RE_CODE_BLOCK.replace_all(&without_spoilers, " ");
-    let body = RE_INLINE_CODE.replace_all(&without_blocks, " ");
+    let body = strip_protected(&normalize_input(raw));
     RE_URL
         .find_iter(&body)
         .map(|matched| {
@@ -96,14 +93,74 @@ pub fn collect_url_media(raw: &str) -> Vec<MediaKind> {
 
 /// Collects spoiler/code announcements while ensuring nested code inside a spoiler is only counted once.
 pub fn collect_markdown_media(raw: &str) -> Vec<MediaKind> {
-    let mut output = Vec::new();
-    output.extend(RE_SPOILER.find_iter(raw).map(|_| MediaKind::Spoiler));
-    let without_spoilers = RE_SPOILER.replace_all(raw, " ");
-    let blocks = RE_CODE_BLOCK.find_iter(&without_spoilers).count();
-    let without_blocks = RE_CODE_BLOCK.replace_all(&without_spoilers, " ");
-    let inline = RE_INLINE_CODE.find_iter(&without_blocks).count();
-    output.extend(std::iter::repeat_n(MediaKind::Code, blocks + inline));
+    let normalized = normalize_input(raw);
+    let (masked, code) = mask_code(&normalized);
+    let spoilers = RE_SPOILER
+        .find_iter(&masked)
+        .map(|matched| matched.range())
+        .collect::<Vec<_>>();
+    let outside_spoilers = code
+        .iter()
+        .filter(|range| {
+            !spoilers
+                .iter()
+                .any(|spoiler| spoiler.start <= range.start && range.end <= spoiler.end)
+        })
+        .count();
+    let mut output = vec![MediaKind::Spoiler; spoilers.len()];
+    output.extend(std::iter::repeat_n(MediaKind::Code, outside_spoilers));
     output
+}
+
+/// Drops invisible format characters and folds compatibility forms before any pattern runs, so
+/// neither a full-width URL nor a zero-width space inside a blocked word slips past a filter.
+fn normalize_input(raw: &str) -> String {
+    raw.chars()
+        .filter(|character| !is_invisible_format(*character))
+        .collect::<String>()
+        .nfkc()
+        .collect()
+}
+
+/// Discord renders code literally, so `||` inside code is not a spoiler marker. Code is blanked
+/// with the same number of spaces, keeping byte offsets valid for the spoiler search, and the
+/// blanked ranges are returned in order.
+fn mask_code(text: &str) -> (String, Vec<std::ops::Range<usize>>) {
+    let mut masked = text.to_owned();
+    let mut ranges = Vec::new();
+    for pattern in [&*RE_CODE_BLOCK, &*RE_INLINE_CODE] {
+        let found = pattern
+            .find_iter(&masked)
+            .map(|matched| matched.range())
+            .collect::<Vec<_>>();
+        for range in found {
+            masked.replace_range(range.clone(), &" ".repeat(range.len()));
+            ranges.push(range);
+        }
+    }
+    ranges.sort_by_key(|range| range.start);
+    (masked, ranges)
+}
+
+/// Removes code blocks, inline code and spoilers, with code taking precedence as in Discord.
+fn strip_protected(text: &str) -> String {
+    let (masked, _) = mask_code(text);
+    RE_SPOILER.replace_all(&masked, " ").into_owned()
+}
+
+/// Zero-width and directional format characters that render as nothing. ZWNJ (U+200C) is kept
+/// because it changes how Persian and Indic words are written.
+fn is_invisible_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{feff}'
+    )
 }
 
 fn is_gif_url(url: &str) -> bool {
@@ -252,6 +309,46 @@ mod tests {
         );
         assert!(collect_url_media("||https://exemplo.com||").is_empty());
         assert!(collect_markdown_media("mensagem normal").is_empty());
+    }
+
+    #[test]
+    fn code_that_shows_spoiler_syntax_does_not_unhide_a_real_spoiler() {
+        let message = "use `||` to hide, like ||ending||";
+        let spoken = clean_text(message, &options(200));
+        assert!(
+            spoken.contains("use") && spoken.contains("hide"),
+            "{spoken}"
+        );
+        assert!(!spoken.contains("ending"), "{spoken}");
+        assert_eq!(
+            collect_markdown_media(message),
+            vec![MediaKind::Spoiler, MediaKind::Code]
+        );
+        assert_eq!(
+            collect_markdown_media("||secret `x`||"),
+            vec![MediaKind::Spoiler]
+        );
+    }
+
+    #[test]
+    fn full_width_links_are_removed_like_ordinary_links() {
+        let message = "see ｈｔｔｐｓ://example.com/x now";
+        let spoken = clean_text(message, &options(200));
+        assert!(!spoken.contains("example"), "{spoken}");
+        assert_eq!(collect_url_media(message), vec![MediaKind::Link]);
+    }
+
+    #[test]
+    fn invisible_characters_cannot_split_a_word_but_zwnj_survives() {
+        assert_eq!(
+            clean_text("bad\u{200B}word", &options(200)),
+            clean_text("badword", &options(200))
+        );
+        assert_eq!(
+            clean_text("bad\u{00AD}word", &options(200)),
+            clean_text("badword", &options(200))
+        );
+        assert!(clean_text("می\u{200C}خواهم", &options(200)).contains('\u{200C}'));
     }
 
     #[test]

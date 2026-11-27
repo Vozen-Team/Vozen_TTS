@@ -57,7 +57,8 @@ pub enum StripeEventInput {
     SubscriptionUpdated {
         subscription_id: String,
         period_end: Option<i64>,
-        status: String,
+        /// `None` when the event carried no status; the stored status is then kept.
+        status: Option<String>,
     },
     InvoiceFailed {
         subscription_id: String,
@@ -188,15 +189,39 @@ impl SqliteStore {
             .map_err(StoreError::from)
     }
 
+    /// The customer to reuse for checkout and the billing portal. A live subscription wins over
+    /// a more recently updated canceled one, so the portal never hides what the user still pays.
     pub fn stripe_customer_for_user(&self, user_id: &str) -> Result<Option<String>, StoreError> {
         self.connection()
             .query_row(
                 "SELECT customer_id FROM stripe_subscription
-                 WHERE user_id = ?1 ORDER BY updated_at DESC LIMIT 1",
+                 WHERE user_id = ?1
+                 ORDER BY (status IN ('active', 'trialing', 'past_due')) DESC, updated_at DESC
+                 LIMIT 1",
                 [user_id],
                 |row| row.get(0),
             )
             .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Whether the user already pays for `plan` through a live Stripe subscription. Seats do not
+    /// stack across subscriptions, so a second one for the same plan would only charge twice.
+    pub fn has_live_stripe_subscription(
+        &self,
+        user_id: &str,
+        plan: &str,
+        now: i64,
+    ) -> Result<bool, StoreError> {
+        self.connection()
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM stripe_subscription
+                   WHERE user_id = ?1 AND plan = ?2
+                     AND status IN ('active', 'trialing', 'past_due')
+                     AND current_period_end > ?3)",
+                params![user_id, plan, now],
+                |row| row.get(0),
+            )
             .map_err(StoreError::from)
     }
 
@@ -373,24 +398,21 @@ impl SqliteStore {
                 period_end,
                 status,
             } => {
-                if let Some(subscription) = transaction
+                if let Some((current_period_end, current_status)) = transaction
                     .query_row(
-                        "SELECT customer_id, user_id, plan, seats, current_period_end
+                        "SELECT current_period_end, status
                          FROM stripe_subscription WHERE subscription_id=?1",
                         [subscription_id],
-                        |row| {
-                            Ok((
-                                row.get::<_, String>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, String>(2)?,
-                                row.get::<_, i64>(3)?,
-                                row.get::<_, i64>(4)?,
-                            ))
-                        },
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
                     )
                     .optional()?
+                    // Stripe delivers events out of order, and `canceled` is terminal: a late
+                    // `updated` must not revive the subscription or rewrite its last period.
+                    .filter(|(_, current_status)| current_status != "canceled")
                 {
-                    let period_end = period_end.unwrap_or(subscription.4);
+                    let period_end = period_end.unwrap_or(current_period_end);
+                    // A payload without a status says nothing about it; keep what we know.
+                    let status = status.as_deref().unwrap_or(&current_status);
                     transaction.execute(
                         "UPDATE stripe_subscription SET current_period_end=?2, status=?3, updated_at=?4
                          WHERE subscription_id=?1",
@@ -701,6 +723,136 @@ mod tests {
         );
     }
 
+    fn subscription(
+        id: &str,
+        customer: &str,
+        plan: &str,
+        status: &str,
+        updated_at: i64,
+    ) -> StripeSubscriptionInput {
+        StripeSubscriptionInput {
+            subscription_id: id.into(),
+            customer_id: customer.into(),
+            user_id: "user_test".into(),
+            plan: plan.into(),
+            seats: 1,
+            current_period_end: NOW + 60_000,
+            status: status.into(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn the_portal_customer_is_the_one_with_a_live_subscription() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .upsert_stripe_subscription(&subscription("sub_a", "cus_a", "plus", "active", NOW))
+            .unwrap();
+        store
+            .upsert_stripe_subscription(&subscription(
+                "sub_b",
+                "cus_b",
+                "premium",
+                "canceled",
+                NOW + 10,
+            ))
+            .unwrap();
+        assert_eq!(
+            store
+                .stripe_customer_for_user("user_test")
+                .unwrap()
+                .as_deref(),
+            Some("cus_a")
+        );
+    }
+
+    #[test]
+    fn only_a_live_subscription_to_the_same_plan_blocks_a_second_checkout() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .upsert_stripe_subscription(&subscription("sub_a", "cus_a", "plus", "active", NOW))
+            .unwrap();
+        assert!(
+            store
+                .has_live_stripe_subscription("user_test", "plus", NOW)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .has_live_stripe_subscription("user_test", "premium", NOW)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .has_live_stripe_subscription("user_test", "plus", NOW + 60_001)
+                .unwrap()
+        );
+        store
+            .upsert_stripe_subscription(&subscription(
+                "sub_a",
+                "cus_a",
+                "plus",
+                "canceled",
+                NOW + 1,
+            ))
+            .unwrap();
+        assert!(
+            !store
+                .has_live_stripe_subscription("user_test", "plus", NOW)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn late_or_statusless_updates_never_revive_a_canceled_subscription() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .apply_stripe_event_once("checkout", &checkout(), NOW)
+            .unwrap();
+        let before = store.stripe_subscription("sub_test").unwrap().unwrap();
+        // An event without a status keeps the stored one instead of assuming `active`.
+        store
+            .apply_stripe_event_once(
+                "no_status",
+                &StripeEventInput::SubscriptionUpdated {
+                    subscription_id: "sub_test".into(),
+                    period_end: None,
+                    status: None,
+                },
+                NOW + 1,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .stripe_subscription("sub_test")
+                .unwrap()
+                .unwrap()
+                .status,
+            before.status
+        );
+        for (event, status) in [("deleted", "canceled"), ("late_update", "active")] {
+            store
+                .apply_stripe_event_once(
+                    event,
+                    &StripeEventInput::SubscriptionUpdated {
+                        subscription_id: "sub_test".into(),
+                        period_end: Some(NOW + 60_000),
+                        status: Some(status.into()),
+                    },
+                    NOW + 2,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .stripe_subscription("sub_test")
+                .unwrap()
+                .unwrap()
+                .status,
+            "canceled"
+        );
+    }
+
     #[test]
     fn late_checkout_does_not_reactivate_canceled_subscription() {
         let store = SqliteStore::open_in_memory().unwrap();
@@ -713,7 +865,7 @@ mod tests {
                 &StripeEventInput::SubscriptionUpdated {
                     subscription_id: "sub_test".into(),
                     period_end: Some(NOW + 60_000),
-                    status: "canceled".into(),
+                    status: Some("canceled".into()),
                 },
                 NOW + 1,
             )

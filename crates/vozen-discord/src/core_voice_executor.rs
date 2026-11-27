@@ -484,6 +484,7 @@ mod tests {
             _: &crate::VoiceDestination,
             _: &Path,
             _: QueueEnqueueOptions<'_>,
+            _: &(dyn Fn() -> bool + Send + Sync),
         ) -> Result<(), CommandPlaybackError> {
             panic!("no authorized voice session")
         }

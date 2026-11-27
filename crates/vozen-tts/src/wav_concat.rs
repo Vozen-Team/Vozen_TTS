@@ -1,8 +1,10 @@
-//! Canonical PCM WAV parsing and concatenation for multi-voice Piper requests.
+//! Canonical PCM WAV parsing and concatenation for multi-voice requests.
 //!
-//! Piper's supported Vozen models emit 22_050 Hz mono 16-bit PCM. Keeping this strict mirrors
-//! the Node runtime and prevents a malformed provider response from becoming a corrupted Discord
-//! audio stream. Chunks are walked by ID rather than assuming a fixed 44-byte header.
+//! Only mono 16-bit PCM is accepted. Piper emits 22_050 Hz while Kokoro and OpenAI emit their
+//! native 24_000 Hz, so concatenation keeps the first segment's sample rate and requires every
+//! segment to match it. Keeping this strict prevents a malformed provider response from becoming
+//! a corrupted Discord audio stream. Chunks are walked by ID rather than assuming a fixed
+//! 44-byte header.
 
 use thiserror::Error;
 
@@ -100,14 +102,19 @@ pub fn concat_wavs(wavs: &[Vec<u8>], silence_ms: u32) -> Result<Vec<u8>, WavErro
         .iter()
         .map(|wav| parse_wav(wav))
         .collect::<Result<Vec<_>, _>>()?;
-    if parsed
-        .iter()
-        .any(|wav| !is_piper_format(wav.format) || wav.data.len() % usize::from(block_align()) != 0)
+    // Providers emit different native rates (Piper 22,050 Hz, Kokoro and OpenAI 24,000 Hz), so
+    // the output follows the first segment and every segment must share that exact format.
+    let format = parsed[0].format;
+    let align = block_align(format);
+    if !is_supported_pcm(format)
+        || parsed
+            .iter()
+            .any(|wav| wav.format != format || wav.data.len() % usize::from(align) != 0)
     {
         return Err(WavError::UnsupportedFormat);
     }
-    let silence_bytes = (u64::from(silence_ms) * u64::from(PIPER_SAMPLE_RATE) / 1_000)
-        .checked_mul(u64::from(block_align()))
+    let silence_bytes = (u64::from(silence_ms) * u64::from(format.sample_rate) / 1_000)
+        .checked_mul(u64::from(align))
         .ok_or(WavError::TooLarge)?;
     let audio_bytes = parsed.iter().try_fold(0u64, |total, wav| {
         total
@@ -128,48 +135,71 @@ pub fn concat_wavs(wavs: &[Vec<u8>], silence_ms: u32) -> Result<Vec<u8>, WavErro
         }
         data.extend_from_slice(wav.data);
     }
-    Ok(build_wav(&data))
+    Ok(build_wav_with(format, &data))
 }
 
+/// Canonical Piper-format silence (22,050 Hz mono 16-bit).
 pub fn silence_wav(milliseconds: u32) -> Vec<u8> {
-    let samples = u64::from(milliseconds) * u64::from(PIPER_SAMPLE_RATE) / 1_000;
-    let bytes = samples
-        .saturating_mul(u64::from(block_align()))
-        .min(u64::from(u32::MAX - 36));
-    build_wav(&vec![0; bytes as usize])
+    silence_wav_with(PIPER_FORMAT, milliseconds)
 }
 
-/// Prepends a canonical silence segment while preserving the strict Piper WAV format.
+fn silence_wav_with(format: WavFormat, milliseconds: u32) -> Vec<u8> {
+    let samples = u64::from(milliseconds) * u64::from(format.sample_rate) / 1_000;
+    let bytes = samples
+        .saturating_mul(u64::from(block_align(format)))
+        .min(u64::from(u32::MAX - 36));
+    build_wav_with(format, &vec![0; bytes as usize])
+}
+
+/// Prepends silence in the source WAV's own format (sample rate included).
 pub fn prepend_silence_wav(wav: &[u8], milliseconds: u32) -> Result<Vec<u8>, WavError> {
     if milliseconds == 0 {
         return Ok(wav.to_vec());
     }
-    concat_wavs(&[silence_wav(milliseconds), wav.to_vec()], 0)
+    let format = parse_wav(wav)?.format;
+    if !is_supported_pcm(format) {
+        return Err(WavError::UnsupportedFormat);
+    }
+    concat_wavs(&[silence_wav_with(format, milliseconds), wav.to_vec()], 0)
 }
 
-fn is_piper_format(format: WavFormat) -> bool {
+const PIPER_FORMAT: WavFormat = WavFormat {
+    audio_format: 1,
+    channels: PIPER_CHANNELS,
+    sample_rate: PIPER_SAMPLE_RATE,
+    bits_per_sample: PIPER_BITS_PER_SAMPLE,
+};
+
+/// Mono 16-bit PCM at any positive sample rate; Songbird resamples on playback.
+fn is_supported_pcm(format: WavFormat) -> bool {
     format.audio_format == 1
-        && format.sample_rate == PIPER_SAMPLE_RATE
+        && format.sample_rate > 0
         && format.channels == PIPER_CHANNELS
         && format.bits_per_sample == PIPER_BITS_PER_SAMPLE
 }
 
-fn block_align() -> u16 {
-    PIPER_CHANNELS * (PIPER_BITS_PER_SAMPLE / 8)
+fn block_align(format: WavFormat) -> u16 {
+    format.channels * (format.bits_per_sample / 8)
 }
 
+#[cfg(test)]
 fn build_wav(data: &[u8]) -> Vec<u8> {
+    build_wav_with(PIPER_FORMAT, data)
+}
+
+fn build_wav_with(format: WavFormat, data: &[u8]) -> Vec<u8> {
+    let align = block_align(format);
     let mut out = Vec::with_capacity(44 + data.len());
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
     out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&PIPER_CHANNELS.to_le_bytes());
-    out.extend_from_slice(&PIPER_SAMPLE_RATE.to_le_bytes());
-    out.extend_from_slice(&(PIPER_SAMPLE_RATE * u32::from(block_align())).to_le_bytes());
-    out.extend_from_slice(&block_align().to_le_bytes());
-    out.extend_from_slice(&PIPER_BITS_PER_SAMPLE.to_le_bytes());
+    out.extend_from_slice(&format.channels.to_le_bytes());
+    out.extend_from_slice(&format.sample_rate.to_le_bytes());
+    out.extend_from_slice(&(format.sample_rate * u32::from(align)).to_le_bytes());
+    out.extend_from_slice(&align.to_le_bytes());
+    out.extend_from_slice(&format.bits_per_sample.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());
     out.extend_from_slice(data);
@@ -224,5 +254,44 @@ mod tests {
         assert_eq!(&parsed.data[..44], vec![0; 44].as_slice());
         assert_eq!(&parsed.data[44..], &[1, 2, 3, 4]);
         assert_eq!(parse_wav(&source).expect("source").data, &[1, 2, 3, 4]);
+    }
+
+    const KOKORO_FORMAT: WavFormat = WavFormat {
+        audio_format: 1,
+        channels: 1,
+        sample_rate: 24_000,
+        bits_per_sample: 16,
+    };
+
+    #[test]
+    fn concatenates_native_24_khz_segments_without_resampling() {
+        let first = build_wav_with(KOKORO_FORMAT, &[1, 2]);
+        let second = build_wav_with(KOKORO_FORMAT, &[3, 4]);
+        let combined = concat_wavs(&[first, second], 1).expect("combined");
+        let parsed = parse_wav(&combined).expect("parsed");
+        assert_eq!(parsed.format, KOKORO_FORMAT);
+        // 1 ms at 24 kHz is 24 samples, 48 bytes of silence between the segments.
+        assert_eq!(parsed.data.len(), 2 + 48 + 2);
+        assert_eq!(&parsed.data[50..], [3, 4]);
+    }
+
+    #[test]
+    fn rejects_segments_with_different_sample_rates() {
+        let piper = build_wav(&[1, 2]);
+        let kokoro = build_wav_with(KOKORO_FORMAT, &[3, 4]);
+        assert_eq!(
+            concat_wavs(&[piper, kokoro], 0),
+            Err(WavError::UnsupportedFormat)
+        );
+    }
+
+    #[test]
+    fn lead_silence_follows_the_source_sample_rate() {
+        let source = build_wav_with(KOKORO_FORMAT, &[1, 2]);
+        let prefixed = prepend_silence_wav(&source, 1_000).expect("prefixed");
+        let parsed = parse_wav(&prefixed).expect("parsed");
+        assert_eq!(parsed.format.sample_rate, 24_000);
+        assert_eq!(parsed.data.len(), 48_000 + 2);
+        assert_eq!(&parsed.data[48_000..], [1, 2]);
     }
 }
