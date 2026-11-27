@@ -328,7 +328,7 @@ mod tests {
     use tower::ServiceExt;
     use vozen_store::SqliteStore;
 
-    use crate::premium_api::{ActivationIdentity, ActivationIdentityError, DiscordIdentity};
+    use crate::premium_api::DiscordIdentity;
 
     struct Identities;
 
@@ -343,13 +343,6 @@ mod tests {
                     avatar_decoration_asset: Some("a_fed43ab12698df65902ba06727e20c0e".into()),
                 })
                 .ok_or(())
-        }
-
-        async fn resolve_activation_identity(
-            &self,
-            _bearer: &str,
-        ) -> Result<ActivationIdentity, ActivationIdentityError> {
-            Err(ActivationIdentityError::InvalidToken)
         }
     }
 

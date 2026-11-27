@@ -685,277 +685,6 @@ body.page-account .ppanel__meta {
   line-height: 1.55;
 }
 
-body.page-account .ppanel__claim {
-  margin-top: 28px;
-  padding: clamp(20px, 3vw, 28px);
-  border: 1px solid var(--account-stroke);
-  border-radius: 21px;
-  background:
-    radial-gradient(85% 90% at 100% 0%, rgba(46, 230, 200, 0.07), transparent 72%),
-    rgba(4, 8, 15, 0.48);
-}
-
-body.page-account .ppanel__claimhead {
-  max-width: 620px;
-  margin-bottom: 19px;
-}
-
-body.page-account .ppanel__claimeyebrow {
-  display: block;
-  margin-bottom: 7px;
-  color: var(--amber);
-  font-family: var(--f-mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-body.page-account .ppanel__claimtitle {
-  display: block;
-  color: var(--text-0);
-  font-family: var(--f-display);
-  font-size: clamp(18px, 2.6vw, 23px);
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.03em;
-}
-
-body.page-account .ppanel__claimhint {
-  margin: 8px 0 0;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-body.page-account .ppanel__claimconsent {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 11px;
-  align-items: start;
-  margin: 0 0 18px;
-  padding: 13px 14px;
-  color: var(--text-1);
-  font-size: 12.5px;
-  line-height: 1.52;
-  cursor: pointer;
-  border: 1px solid rgba(46, 230, 200, 0.16);
-  border-radius: 13px;
-  background: rgba(46, 230, 200, 0.045);
-}
-
-body.page-account .ppanel__claimconsent input {
-  width: 17px;
-  height: 17px;
-  margin: 1px 0 0;
-  accent-color: var(--aqua);
-}
-
-body.page-account .ppanel__claimconsent a {
-  color: var(--aqua);
-  font-weight: 650;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-
-body.page-account .ppanel__claimconsent a:hover {
-  color: var(--aqua-2);
-  text-decoration: none;
-}
-
-body.page-account .ppanel__activationways {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-body.page-account .ppanel__activationway {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--account-stroke);
-  border-radius: 15px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-body.page-account .ppanel__wayhead {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 13px;
-}
-
-body.page-account .ppanel__waynum {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  color: var(--aqua);
-  font-family: var(--f-mono);
-  font-size: 9px;
-  font-weight: 700;
-  border: 1px solid rgba(46, 230, 200, 0.25);
-  border-radius: 8px;
-  background: rgba(46, 230, 200, 0.06);
-}
-
-body.page-account .ppanel__wayhead b {
-  display: block;
-  margin-top: 3px;
-  color: var(--text-0);
-  font-size: 13.5px;
-  line-height: 1.35;
-}
-
-body.page-account .ppanel__activatebtn,
-body.page-account .ppanel__claimbtn {
-  min-height: 44px;
-  padding: 10px 15px;
-  color: #04110f;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-  border: 0;
-  border-radius: 10px;
-  background: var(--grad-brand);
-  box-shadow: 0 15px 30px -21px rgba(46, 230, 200, 0.95);
-  transition:
-    transform 160ms ease,
-    filter 160ms ease,
-    opacity 160ms ease;
-}
-
-body.page-account .ppanel__activatebtn {
-  width: 100%;
-  margin-top: auto;
-}
-
-body.page-account .ppanel__activatebtn:hover,
-body.page-account .ppanel__claimbtn:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-}
-
-body.page-account .ppanel__activatebtn:active,
-body.page-account .ppanel__claimbtn:active {
-  transform: translateY(0) scale(0.99);
-}
-
-body.page-account .ppanel__activatebtn:disabled,
-body.page-account .ppanel__claimbtn:disabled,
-body.page-account .ppanel__claiminput:disabled {
-  cursor: default;
-  opacity: 0.56;
-}
-
-body.page-account .ppanel__gift {
-  margin: 11px 0 0;
-  color: var(--text-2);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-body.page-account .ppanel__claimform {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  margin-top: auto;
-}
-
-body.page-account .ppanel__claiminput {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  padding: 10px 12px;
-  color: var(--text-0);
-  font: 12px/1.3 var(--f-mono);
-  border: 1px solid var(--account-stroke-bright);
-  border-radius: 10px;
-  background: rgba(4, 8, 15, 0.66);
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease;
-}
-
-body.page-account .ppanel__claiminput::placeholder {
-  color: rgba(149, 156, 186, 0.7);
-}
-
-body.page-account .ppanel__claiminput:focus {
-  outline: none;
-  border-color: rgba(46, 230, 200, 0.72);
-  box-shadow: 0 0 0 3px rgba(46, 230, 200, 0.08);
-}
-
-body.page-account .ppanel__claimmsg {
-  margin: 0 0 14px;
-  padding: 11px 13px;
-  font-size: 12px;
-  line-height: 1.5;
-  border: 1px solid var(--account-stroke);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-body.page-account .ppanel__activationway--instant .ppanel__claimmsg {
-  margin: 10px 0 14px;
-}
-
-body.page-account .ppanel__receiptbody .ppanel__claimmsg {
-  margin: 10px 0 0;
-}
-
-body.page-account .ppanel__claimmsg.is-ok {
-  color: var(--aqua);
-  border-color: rgba(46, 230, 200, 0.24);
-  background: rgba(46, 230, 200, 0.055);
-}
-
-body.page-account .ppanel__claimmsg.is-err {
-  color: #ff8eb9;
-  border-color: rgba(255, 110, 169, 0.22);
-  background: rgba(255, 110, 169, 0.05);
-}
-
-body.page-account .ppanel__activationitems {
-  margin: 8px 0;
-  padding-left: 18px;
-  color: var(--text-1);
-}
-
-body.page-account .ppanel__msglink,
-body.page-account .ppanel__claimlostbtn {
-  display: inline;
-  padding: 0;
-  color: var(--aqua);
-  font: inherit;
-  font-weight: 700;
-  text-align: left;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-  border: 0;
-  background: none;
-}
-
-body.page-account .ppanel__msglink:hover,
-body.page-account .ppanel__claimlostbtn:hover {
-  text-decoration: none;
-}
-
-body.page-account .ppanel__claimlost {
-  margin: 13px 0 0;
-  padding: 12px 0 0;
-  color: var(--text-2);
-  font-size: 11.5px;
-  line-height: 1.5;
-  border-top: 1px solid var(--account-stroke);
-}
-
 body.page-account .ppanel__anon,
 body.page-account .ppanel__loading,
 body.page-account .ppanel__error {
@@ -1178,26 +907,6 @@ body.page-account .ppmodal__backdrop {
   backdrop-filter: blur(10px);
 }
 
-body.page-account .ppmodal__box {
-  max-width: 470px;
-  padding: 28px;
-  border-color: var(--account-stroke-bright);
-  border-radius: 21px;
-  background:
-    radial-gradient(70% 50% at 100% 0%, rgba(46, 230, 200, 0.08), transparent),
-    var(--account-surface-strong);
-  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.68);
-}
-
-body.page-account .ppmodal__title {
-  font-size: 21px;
-  letter-spacing: -0.03em;
-}
-
-body.page-account .ppmodal__num {
-  border-radius: 6px;
-}
-
 @keyframes accountContentIn {
   from {
     opacity: 0;
@@ -1321,19 +1030,12 @@ body.page-account .ppmodal__num {
     justify-self: start;
   }
 
-  body.page-account .ppanel__statusgrid,
-  body.page-account .ppanel__activationways {
+  body.page-account .ppanel__statusgrid {
     grid-template-columns: 1fr;
   }
 
   body.page-account .ppanel__status {
     min-height: 132px;
-  }
-
-  body.page-account .ppanel__claim {
-    margin-top: 20px;
-    padding: 19px;
-    border-radius: 17px;
   }
 
   .account-rail {
@@ -1379,14 +1081,6 @@ body.page-account .ppmodal__num {
     place-items: start;
   }
 
-  body.page-account .ppanel__claimform {
-    grid-template-columns: 1fr;
-  }
-
-  body.page-account .ppanel__claimbtn {
-    width: 100%;
-  }
-
   .account-help {
     grid-template-columns: 1fr;
   }
@@ -1408,9 +1102,7 @@ body.page-account .ppmodal__num {
   .account-back svg,
   .account-dashboard-link,
   .account-dashboard-link__arrow,
-  body.page-account .ppanel__status,
-  body.page-account .ppanel__activatebtn,
-  body.page-account .ppanel__claimbtn {
+  body.page-account .ppanel__status {
     transition: none;
   }
 }
@@ -1435,85 +1127,6 @@ body.page-account .foot {
 
 .account-help a + a {
   border-left: 1px solid var(--account-stroke);
-}
-
-body.is-claim-open {
-  overflow: hidden;
-}
-
-body.page-account .ppanel__claim {
-  position: fixed;
-  inset: 0;
-  z-index: 110;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 22px;
-  overflow: auto;
-  border: 0;
-  border-radius: 0;
-  background: rgba(2, 5, 10, 0.82);
-  box-shadow: none;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-body.page-account .ppanel__claim[hidden] {
-  display: none;
-}
-
-body.page-account .ppanel__claimbox {
-  position: relative;
-  width: min(700px, 100%);
-  max-height: calc(100dvh - 44px);
-  padding: 24px;
-  overflow: auto;
-  border: 1px solid var(--account-stroke-bright);
-  border-radius: 22px;
-  background:
-    radial-gradient(75% 55% at 100% 0%, rgba(46, 230, 200, 0.09), transparent 72%),
-    var(--account-surface-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 42px 110px rgba(0, 0, 0, 0.72);
-}
-
-body.page-account .ppanel__claimbox:focus {
-  outline: none;
-}
-
-body.page-account .ppanel__claimclose {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  color: var(--text-2);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  border: 1px solid var(--account-stroke);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.025);
-  transition:
-    color 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease;
-}
-
-body.page-account .ppanel__claimclose:hover {
-  color: var(--text-0);
-  border-color: var(--account-stroke-bright);
-  background: rgba(255, 255, 255, 0.065);
-}
-
-body.page-account .ppanel__claimbox .ppanel__claimhead {
-  max-width: calc(100% - 48px);
 }
 
 @media (min-width: 1021px) and (min-height: 700px) {
@@ -1737,21 +1350,6 @@ body.page-account .ppanel__claimbox .ppanel__claimhead {
 }
 
 @media (max-width: 760px) {
-  body.page-account .ppanel__claim {
-    place-items: start center;
-    padding: 12px;
-  }
-
-  body.page-account .ppanel__claimbox {
-    max-height: calc(100dvh - 24px);
-    padding: 19px;
-    border-radius: 18px;
-  }
-
-  body.page-account .ppanel__claimclose {
-    top: 12px;
-    right: 12px;
-  }
 
   .account-help {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1760,12 +1358,6 @@ body.page-account .ppanel__claimbox .ppanel__claimhead {
   .account-help a + a {
     border-top: 0;
     border-left: 1px solid var(--account-stroke);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  body.page-account .ppanel__claimclose {
-    transition: none;
   }
 }
 
@@ -1903,142 +1495,6 @@ body.page-account .ppanel__benefitshead p b {
 body.page-account .ppanel__status {
   min-height: 132px;
   padding: 17px;
-}
-
-body.page-account .ppanel__claim {
-  scroll-margin-top: 110px;
-  margin-top: 24px;
-  padding: clamp(20px, 3vw, 26px);
-}
-
-body.page-account .ppanel__claimhead {
-  margin-bottom: 17px;
-}
-
-body.page-account .ppanel__activationway--instant {
-  display: block;
-  padding: 19px;
-  border-color: rgba(46, 230, 200, 0.24);
-  background:
-    radial-gradient(75% 100% at 100% 0%, rgba(46, 230, 200, 0.08), transparent 74%),
-    rgba(46, 230, 200, 0.035);
-}
-
-body.page-account .ppanel__wayhead {
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-body.page-account .ppanel__wayhead > span:last-child {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-body.page-account .ppanel__wayhead b {
-  margin: 0;
-}
-
-body.page-account .ppanel__wayhead small {
-  padding: 3px 6px;
-  color: #061511;
-  font-family: var(--f-mono);
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border-radius: 5px;
-  background: var(--aqua);
-}
-
-body.page-account .ppanel__activationway--instant > .ppanel__claimhint {
-  max-width: 540px;
-  margin-top: 0;
-}
-
-body.page-account .ppanel__claimconsent {
-  margin: 16px 0 14px;
-  background: rgba(4, 8, 15, 0.4);
-}
-
-body.page-account .ppanel__activatebtn {
-  width: min(100%, 270px);
-  margin-top: 0;
-}
-
-body.page-account .ppanel__gift {
-  max-width: 580px;
-}
-
-body.page-account .ppanel__receipt {
-  margin-top: 12px;
-  overflow: hidden;
-  border: 1px solid var(--account-stroke);
-  border-radius: 15px;
-  background: rgba(255, 255, 255, 0.018);
-}
-
-body.page-account .ppanel__receipt summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  min-height: 70px;
-  padding: 13px 15px;
-  color: var(--text-0);
-  cursor: pointer;
-  list-style: none;
-  transition:
-    color 180ms ease,
-    background 180ms ease;
-}
-
-body.page-account .ppanel__receipt summary::-webkit-details-marker {
-  display: none;
-}
-
-body.page-account .ppanel__receipt summary:hover {
-  background: rgba(255, 255, 255, 0.035);
-}
-
-body.page-account .ppanel__receipt summary b,
-body.page-account .ppanel__receipt summary small {
-  display: block;
-}
-
-body.page-account .ppanel__receipt summary b {
-  font-size: 13px;
-}
-
-body.page-account .ppanel__receipt summary small {
-  max-width: 500px;
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--text-2);
-  font-size: 10.5px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-body.page-account .ppanel__receipt summary > svg {
-  color: var(--text-2);
-  transition: transform 180ms ease;
-}
-
-body.page-account .ppanel__receipt[open] summary > svg {
-  transform: rotate(180deg);
-}
-
-body.page-account .ppanel__receiptbody {
-  padding: 17px 15px 16px;
-  border-top: 1px solid var(--account-stroke);
-}
-
-body.page-account .ppanel__receiptbody > .ppanel__claimhint {
-  max-width: 610px;
-  margin: 0 0 13px;
 }
 
 .account-rail {
@@ -2296,14 +1752,6 @@ body.page-account .ppanel__receiptbody > .ppanel__claimhint {
     justify-self: start;
   }
 
-  body.page-account .ppanel__receipt summary small {
-    display: none;
-  }
-
-  body.page-account .ppanel__activatebtn {
-    width: 100%;
-  }
-
   .account-next {
     padding: 22px 18px 20px;
   }
@@ -2316,9 +1764,7 @@ body.page-account .ppanel__receiptbody > .ppanel__claimhint {
 @media (prefers-reduced-motion: reduce) {
   .account-task,
   .account-task__arrow,
-  body.page-account .ppanel__logout,
-  body.page-account .ppanel__receipt summary,
-  body.page-account .ppanel__receipt summary > svg {
+  body.page-account .ppanel__logout {
     transition: none;
   }
 }
@@ -2347,85 +1793,6 @@ body.page-account .foot {
 .account-help a + a {
   border-top: 0;
   border-left: 1px solid var(--account-stroke);
-}
-
-body.is-claim-open {
-  overflow: hidden;
-}
-
-body.page-account .ppanel__claim {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 22px;
-  overflow: auto;
-  border: 0;
-  border-radius: 0;
-  background: rgba(2, 5, 10, 0.82);
-  box-shadow: none;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-body.page-account .ppanel__claim[hidden] {
-  display: none;
-}
-
-body.page-account .ppanel__claimbox {
-  position: relative;
-  width: min(700px, 100%);
-  max-height: calc(100dvh - 44px);
-  padding: 24px;
-  overflow: auto;
-  border: 1px solid var(--account-stroke-bright);
-  border-radius: 22px;
-  background:
-    radial-gradient(75% 55% at 100% 0%, rgba(46, 230, 200, 0.09), transparent 72%),
-    var(--account-surface-strong);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 42px 110px rgba(0, 0, 0, 0.72);
-}
-
-body.page-account .ppanel__claimbox:focus {
-  outline: none;
-}
-
-body.page-account .ppanel__claimclose {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  color: var(--text-2);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  border: 1px solid var(--account-stroke);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.025);
-  transition:
-    color 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease;
-}
-
-body.page-account .ppanel__claimclose:hover {
-  color: var(--text-0);
-  border-color: var(--account-stroke-bright);
-  background: rgba(255, 255, 255, 0.065);
-}
-
-body.page-account .ppanel__claimbox .ppanel__claimhead {
-  max-width: calc(100% - 48px);
 }
 
 @media (min-width: 1021px) and (min-height: 700px) {
@@ -2647,24 +2014,6 @@ body.page-account .ppanel__claimbox .ppanel__claimhead {
     min-height: 40px;
     padding: 7px;
     font-size: 10px;
-  }
-}
-
-@media (max-width: 760px) {
-  body.page-account .ppanel__claim {
-    place-items: start center;
-    padding: 12px;
-  }
-
-  body.page-account .ppanel__claimbox {
-    max-height: calc(100dvh - 24px);
-    padding: 19px;
-    border-radius: 18px;
-  }
-
-  body.page-account .ppanel__claimclose {
-    top: 12px;
-    right: 12px;
   }
 }
 
@@ -3005,15 +2354,6 @@ body.page-account .ppanel__claimbox .ppanel__claimhead {
   body.page-account .ppanel__servers ul {
     margin: 0;
   }
-}
-
-/* Keep account dialogs above the sticky navigation. */
-body.page-account .ppanel__claim {
-  z-index: 110;
-}
-
-body.page-account #ppClaimHelp {
-  z-index: 120;
 }
 
 /* Readability refinement: fill the viewport without returning to a scroll layout. */
@@ -3649,16 +2989,6 @@ body.page-account .account-task--primary .account-task__copy small {
 
 body.page-account .account-task--primary .account-task__arrow {
   color: #c4c9ff;
-}
-
-body.page-account #accountActivateOpen {
-  border-color: rgba(46, 230, 200, 0.22);
-  background: rgba(46, 230, 200, 0.035);
-}
-
-body.page-account #accountActivateOpen:hover {
-  border-color: rgba(46, 230, 200, 0.48);
-  background: rgba(46, 230, 200, 0.075);
 }
 
 body.page-account .account-sync {

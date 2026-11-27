@@ -389,37 +389,6 @@ impl SqliteStore {
         })
     }
 
-    /// Stores only an already-HMACed Ko-fi email key, never a clear-text email address.
-    pub fn remember_kofi_supporter(
-        &self,
-        email_hash: &str,
-        discord_id: &str,
-        now: i64,
-    ) -> Result<(), StoreError> {
-        remember_kofi_supporter_on(self.connection(), email_hash, discord_id, now)
-    }
-
-    pub fn kofi_supporter(&self, email_hash: &str) -> Result<Option<String>, StoreError> {
-        self.connection()
-            .query_row(
-                "SELECT discord_id FROM kofi_supporter WHERE email_hash = ?1",
-                [email_hash],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(StoreError::from)
-    }
-
-    /// Returns true exactly once for an external transaction ID. The future webhook handler must
-    /// perform this and a grant in the same transaction before it is allowed to serve traffic.
-    pub fn record_kofi_transaction(
-        &self,
-        transaction_id: &str,
-        now: i64,
-    ) -> Result<bool, StoreError> {
-        record_kofi_transaction_on(self.connection(), transaction_id, now)
-    }
-
     /// Reconciles the complete current Discord entitlement set. It deliberately never mutates
     /// durable Ko-fi, code-redemption or manual grants.
     pub fn sync_discord_entitlements(
@@ -468,31 +437,6 @@ impl SqliteStore {
             revoked: stale.len(),
         })
     }
-}
-
-pub(crate) fn record_kofi_transaction_on(
-    connection: &Connection,
-    transaction_id: &str,
-    now: i64,
-) -> Result<bool, StoreError> {
-    Ok(connection.execute(
-        "INSERT OR IGNORE INTO kofi_transaction (transaction_id, processed_at) VALUES (?1, ?2)",
-        params![transaction_id, now],
-    )? > 0)
-}
-
-pub(crate) fn remember_kofi_supporter_on(
-    connection: &Connection,
-    email_hash: &str,
-    discord_id: &str,
-    now: i64,
-) -> Result<(), StoreError> {
-    connection.execute(
-            "INSERT INTO kofi_supporter (email_hash, discord_id, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(email_hash) DO UPDATE SET discord_id = excluded.discord_id, updated_at = excluded.updated_at",
-            params![email_hash, discord_id, now],
-        )?;
-    Ok(())
 }
 
 pub(crate) fn premium_pass_from(
@@ -825,24 +769,6 @@ mod tests {
                 owner_id: "first".into(),
                 seats: 3
             })
-        );
-
-        store
-            .remember_kofi_supporter("opaque-hmac", "discord-user", NOW)
-            .expect("remember");
-        assert_eq!(
-            store.kofi_supporter("opaque-hmac").expect("lookup"),
-            Some("discord-user".into())
-        );
-        assert!(
-            store
-                .record_kofi_transaction("transaction", NOW)
-                .expect("first delivery")
-        );
-        assert!(
-            !store
-                .record_kofi_transaction("transaction", NOW + 1)
-                .expect("retry")
         );
     }
 }

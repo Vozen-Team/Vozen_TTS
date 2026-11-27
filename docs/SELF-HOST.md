@@ -1,7 +1,7 @@
 # Self-hosting Vozen Rust
 
 Vozen is now a Rust workspace. The Discord runtime, SQLite store, TTS engines,
-games, Premium/OAuth API, Top.gg and Ko-fi integrations live under `crates/`.
+games, Premium/OAuth API, Stripe and Top.gg integrations live under `crates/`.
 The Node/TypeScript bot and its old compose files were removed from `main`.
 
 ## Prerequisites
@@ -31,7 +31,7 @@ fails.
 
 Use `.env.rust.prod.example` as the variable inventory. Keep existing names for
 `DISCORD_TOKEN`, `CLIENT_ID`, `TOPGG_TOKEN`, `TOPGG_WEBHOOK_SECRET`,
-`VOTE_REDEMPTION_SECRET`, `KOFI_WEBHOOK_TOKEN`, `PREMIUM_API_*`,
+`VOTE_REDEMPTION_SECRET`, `PREMIUM_API_*`, `STRIPE_*`,
 `DISCORD_OAUTH_*`, `RUST_TTS_INSTALL_OAUTH_*`, the optional
 `CLOUDFLARE_WEB_ANALYTICS_*` server-only proxy values, and the TTS/voice paths. Rust validates the same command,
 database, voice/i18n and game contracts before starting.
@@ -40,7 +40,7 @@ For the ordered production rollout, Top.gg diagnostics, vote-reward migration
 and browser-install checks, use [the growth operations runbook](GROWTH-OPERATIONS.md).
 
 The public website remains a static Pages site (`site/`), while the dashboard/API
-is served by the Rust API crates. Top.gg, Ko-fi, OAuth and Premium routes and
+is served by the Rust API crates. Top.gg, Stripe, OAuth and Premium routes and
 compatibility tests run in the Rust CI.
 
 ## Verification

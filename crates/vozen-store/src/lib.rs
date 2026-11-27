@@ -30,8 +30,6 @@ mod growth_lifecycle;
 mod guild_config;
 mod guild_departed;
 mod install_oauth_state;
-mod kofi_claim;
-mod kofi_delivery;
 mod kofi_pending;
 mod lang_detect;
 mod migration;
@@ -71,15 +69,7 @@ pub use gcloud_usage::{GcloudUsageScope, day_key_utc, month_key_utc};
 pub use growth_lifecycle::{GrowthDailyMetric, GrowthOverview, GrowthRetentionWindow};
 pub use guild_config::{GuildConfig, GuildConfigPatch};
 pub use guild_departed::DEPARTURE_GRACE_MS;
-pub use kofi_claim::{
-    ACTIVATION_TERMS_VERSION, ActivationConfirmation, ActivationOutcome, ClaimOutcome,
-    ClaimedKofiItem, activate_kofi_by_email_hash, claim_kofi_pending_grant,
-    extract_kofi_receipt_code,
-};
-pub use kofi_delivery::{KofiDelivery, KofiDeliveryOutcome, process_kofi_delivery};
-pub use kofi_pending::{
-    KofiPendingGrant, KofiPendingGrantInput, KofiPendingPlan, PENDING_RETENTION_MS,
-};
+pub use kofi_pending::{KofiPendingGrant, KofiPendingGrantInput, KofiPendingPlan};
 pub use premium::{
     ActivateResult, ActivateStatus, EntitlementGrant, EntitlementSyncResult, GuildPassOwner,
     PremiumKind, PremiumPass, PremiumPassStatus, PremiumStatusView,

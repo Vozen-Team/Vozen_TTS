@@ -5308,6 +5308,7 @@ dependencies = [
  "vozen-contracts",
  "vozen-core",
  "vozen-store",
+ "vozen-tts",
 ]
 
 [[package]]

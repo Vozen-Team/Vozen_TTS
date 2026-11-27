@@ -10,7 +10,7 @@ imagem nem do processo de deploy.
 git clone --branch migration/vozen-rust --single-branch https://github.com/Rexy40407/vozen.git
 cd vozen
 cp .env.rust.prod.example .env.rust.prod
-# preencher DISCORD_TOKEN, CLIENT_ID e integrações Top.gg/Ko-fi/API necessárias
+# preencher DISCORD_TOKEN, CLIENT_ID e integrações Top.gg/Stripe/API necessárias
 docker compose -f docker-compose.rust.prod.yml up -d --build
 docker compose -f docker-compose.rust.prod.yml logs -f vozen
 ```
@@ -31,8 +31,9 @@ curl -fsS http://127.0.0.1:3001/health
 
 Confirme nos logs `gateway ... Ready` e uma resposta HTTP 200. O site público e
 a API (`https://vozen.org` e `https://api.vozen.org/health`) são serviços
-separados, mas continuam a usar os contratos Premium/OAuth, Top.gg e Ko-fi
-mantidos nos crates Rust.
+separados, mas continuam a usar os contratos Premium/OAuth, Stripe e Top.gg
+mantidos nos crates Rust. O Ko-fi foi retirado: as variáveis `KOFI_*` e
+`CLAIM_HELP_WEBHOOK_URL` já não são lidas e podem sair do `.env.rust.prod`.
 
 ## Atualizações e rollback
 

@@ -81,7 +81,7 @@ describe('full product audit regressions', () => {
     expect(readme).toContain('Live voice transcription is a server Premium feature');
     expect(readme).not.toMatch(/Plus[^\n]*and[^\n]*Premium[^\n]*\n?[^\n]*transcription/i);
     expect(architecture).toContain('Rust workspace');
-    expect(architecture).toContain('Top.gg, Ko-fi, OAuth, Premium');
+    expect(architecture).toContain('Top.gg, Stripe, OAuth, Premium');
     expect(architecture).toContain('docker-compose.rust.prod.yml');
     expect(architecture).not.toContain('Node/TypeScript bot');
   });

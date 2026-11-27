@@ -12,9 +12,7 @@ use std::sync::{
 };
 use tower::ServiceExt;
 use vozen_api::{
-    premium_api::{
-        ActivationIdentity, ActivationIdentityError, DiscordIdentity, DiscordIdentityVerifier,
-    },
+    premium_api::{DiscordIdentity, DiscordIdentityVerifier},
     stripe_api::{
         StripeApiConfig, StripePriceIds, StripeSubscriptionLookup,
         stripe_router_with_subscription_lookup,
@@ -37,12 +35,6 @@ impl DiscordIdentityVerifier for Identity {
             avatar: None,
             avatar_decoration_asset: None,
         })
-    }
-    async fn resolve_activation_identity(
-        &self,
-        _: &str,
-    ) -> Result<ActivationIdentity, ActivationIdentityError> {
-        Err(ActivationIdentityError::InvalidToken)
     }
 }
 struct Provider {

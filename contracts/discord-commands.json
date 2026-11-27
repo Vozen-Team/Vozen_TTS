@@ -783,23 +783,10 @@
               "required": false
             },
             {
+              "autocomplete": true,
               "type": 3,
-              "choices": [
-                {
-                  "name": "Default (Google TTS)",
-                  "value": "google"
-                },
-                {
-                  "name": "Piper",
-                  "value": "piper"
-                },
-                {
-                  "name": "💎 Kokoro (Premium neural)",
-                  "value": "kokoro"
-                }
-              ],
               "name": "engine",
-              "description": "Voice engine: Google TTS, Piper or Kokoro (Premium)",
+              "description": "Voice engine for the selected model",
               "required": false
             }
           ]

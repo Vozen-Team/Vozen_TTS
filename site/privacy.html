@@ -46,8 +46,7 @@
         Regulation (GDPR) and similar laws. In plain language: Vozen keeps the settings it
         needs to work, and nothing else. It does <b>not</b> keep a log of your messages, sets
         <b>no cookies</b>, runs <b>no trackers</b>, and never asks you to type your Discord
-        email, phone number, or password. With your Discord OAuth permission, instant activation
-        can read the verified email on your Discord account once, as explained below.
+        email, phone number, or password, and its Discord login does not request your email.
       </p>
 
       <h2>1. Who we are &amp; how to contact us</h2>
@@ -93,7 +92,7 @@
       <h2>4. What we do NOT store</h2>
       <ul>
         <li>We do <b>not</b> keep a history or log of your chat messages. Text is turned into speech on the fly and then discarded.</li>
-        <li>We do <b>not</b> store, cache, or log the verified Discord email used for instant activation or the transient hash computed from it. Both exist only in memory for that activation request and are then discarded.</li>
+        <li>We do <b>not</b> request, store, cache, or log your Discord email.</li>
         <li>To speed up repeated phrases, recently synthesized audio may be cached on the server. It is keyed by a content hash rather than your user ID, rotates out under a bounded cache policy, and can still reveal the spoken content to someone with server-file access.</li>
         <li>Outside of a transcription session you consented to, the bot stays deafened and does not listen to or store voice-channel audio.</li>
         <li>We do <b>not</b> keep web access logs that tie your IP address to your activity. Our API (<code>api.vozen.org</code>) uses your IP only <b>momentarily</b>, in memory, for rate-limiting and security — it is never written to our logs. (This website is served by GitHub Pages, whose standard host logs are outside our control; see §9.)</li>
@@ -131,7 +130,8 @@
       <p>
         When you log in with Discord to view your account or the server dashboard, we use Discord
         OAuth2 and request your basic profile (<b>identify</b>) and, for the dashboard, your
-        <b>server list</b> (<b>guilds</b>). No payment email or checkout credential is requested.
+        <b>server list</b> (<b>guilds</b>). No email, payment email or checkout credential is
+        requested.
         Basic profile and server-list data may be cached in memory for at most ~60 seconds and
         are not written to our database. Your access token stays in <b>your browser</b> and is
         sent only to Vozen's own API over HTTPS.
@@ -143,8 +143,8 @@
         served from our own server, so loading the site sends nothing to third-party font or
         analytics providers. The site uses your browser's storage only for strictly necessary
         functions: your Discord access token (<code>sessionStorage</code>, cleared when you log
-        out or close the tab), a one-shot activation intent containing no email (also
-        <code>sessionStorage</code>, removed on use and expiring after five minutes), and your
+        out or close the tab), the plan and billing period you picked before signing in for
+        checkout (also <code>sessionStorage</code>, removed once used), and your
         chosen interface language (<code>localStorage</code>). Because these are strictly
         necessary to provide what you asked for, no consent banner is required.
       </p>
@@ -175,7 +175,7 @@
         <li><b>Audio cache</b> — rotates automatically (about 500 files per engine, oldest first); not tied to you.</li>
         <li><b>HD-voice usage counter</b> — auto-purged after about 3 months.</li>
         <li><b>Premium entitlement records</b> — kept while needed for an active entitlement and afterwards only for entitlement history, fraud prevention, disputes, and legal obligations; deleted or anonymized when no longer necessary.</li>
-        <li><b>Website login</b> — your token lives only in your browser session; basic identity data may use a ~60-second server-side cache. The activation email and transient hash are never cached and are discarded as soon as that request finishes.</li>
+        <li><b>Website login</b> — your token lives only in your browser session; basic identity data may use a ~60-second server-side cache.</li>
       </ul>
 
       <h2>12. Your rights</h2>

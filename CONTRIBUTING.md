@@ -24,7 +24,7 @@ second bot process beside that container.
 
 - Preserve the public Discord command, response, SQLite, voice/i18n and game
   contracts. Do not create a parallel Node implementation.
-- Keep Top.gg, Ko-fi, Premium/OAuth and dashboard API routes fail-closed and
+- Keep Top.gg, Stripe, Premium/OAuth and dashboard API routes fail-closed and
   covered by Rust tests.
 - Any stored user data needs a documented deletion path in `PRIVACY.md`.
 - Never commit real `.env` files or secrets.
@@ -40,7 +40,7 @@ second bot process beside that container.
 - `crates/vozen-core`: pure policies, games, text and translation logic.
 - `crates/vozen-store`: SQLite schema, migrations, privacy and entitlements.
 - `crates/vozen-tts`: Piper, Google, Kokoro and neural provider adapters.
-- `crates/vozen-api`: dashboard, OAuth, Premium, Top.gg and Ko-fi HTTP routes.
+- `crates/vozen-api`: dashboard, OAuth, Premium/Stripe, admin and Top.gg HTTP routes.
 - `contracts/`: committed compatibility contracts checked before build/deploy.
 - `site-tests/`: static-site acceptance tests.
 

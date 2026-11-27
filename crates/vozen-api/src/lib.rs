@@ -18,7 +18,6 @@ pub mod dashboard_oauth;
 pub mod dashboard_validation;
 pub mod discord_oauth;
 pub mod install_api;
-pub mod kofi_webhook;
 pub mod premium_api;
 pub mod stripe_api;
 pub mod topgg_webhook;
@@ -122,12 +121,10 @@ fn public_routes(public_status: Option<PublicStatusProvider>) -> Router {
 pub struct RuntimeRouterConfig {
     pub public_status: Option<PublicStatusProvider>,
     pub account: Option<account_api::AccountApiConfig>,
-    pub premium: Option<premium_api::PremiumApiConfig>,
     pub stripe: Option<stripe_api::StripeApiConfig>,
     pub dashboard: Option<dashboard_api::DashboardApiConfig>,
     pub install: Option<install_api::InstallApiConfig>,
     pub admin: Option<admin_router::AdminRouterConfig>,
-    pub kofi_webhook: Option<kofi_webhook::KofiWebhookConfig>,
     pub topgg_webhook: Option<topgg_webhook::TopggWebhookConfig>,
 }
 
@@ -135,16 +132,12 @@ pub struct RuntimeRouterConfig {
 pub enum RuntimeRouterError {
     #[error("account API configuration: {0}")]
     Account(#[from] account_api::AccountApiConfigError),
-    #[error("premium API configuration: {0}")]
-    Premium(#[from] premium_api::PremiumApiConfigError),
     #[error("dashboard API configuration: {0}")]
     Dashboard(#[from] dashboard_api::DashboardApiConfigError),
     #[error("TTS install API configuration: {0}")]
     Install(#[from] install_api::InstallApiConfigError),
     #[error("admin API configuration: {0}")]
     Admin(#[from] admin_router::AdminRouterConfigError),
-    #[error("Ko-fi webhook configuration: {0}")]
-    KofiWebhook(#[from] kofi_webhook::KofiWebhookConfigError),
     #[error("Top.gg webhook configuration: {0}")]
     TopggWebhook(#[from] topgg_webhook::TopggWebhookConfigError),
     #[error("Stripe configuration: {0}")]
@@ -160,9 +153,6 @@ pub fn runtime_router(config: RuntimeRouterConfig) -> Result<Router, RuntimeRout
     if let Some(account) = config.account {
         router = router.merge(account_api::account_router(account)?);
     }
-    if let Some(premium) = config.premium {
-        router = router.merge(premium_api::premium_router(premium)?);
-    }
     if let Some(stripe) = config.stripe {
         router = router.merge(stripe_api::stripe_router(stripe)?);
     }
@@ -174,9 +164,6 @@ pub fn runtime_router(config: RuntimeRouterConfig) -> Result<Router, RuntimeRout
     }
     if let Some(admin) = config.admin {
         router = router.merge(admin_router::admin_router(admin)?);
-    }
-    if let Some(kofi_webhook) = config.kofi_webhook {
-        router = router.merge(kofi_webhook::kofi_webhook_router(kofi_webhook)?);
     }
     if let Some(topgg_webhook) = config.topgg_webhook {
         router = router.merge(topgg_webhook::topgg_webhook_router(topgg_webhook)?);
@@ -277,12 +264,10 @@ mod tests {
         let app = runtime_router(RuntimeRouterConfig {
             public_status: None,
             account: None,
-            premium: None,
             stripe: None,
             dashboard: None,
             install: None,
             admin: None,
-            kofi_webhook: None,
             topgg_webhook: None,
         })
         .expect("compose public-only runtime");

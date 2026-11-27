@@ -18,24 +18,6 @@ describe('site UX polish contract', () => {
       'document.getElementById("ppLogoutConfirmAction")?.addEventListener("click", logout)',
     );
   });
-  it('shows a specific inline error before submitting an empty Ko-fi receipt', () => {
-    const script = source('site/js/main-v51.js');
-    const emptyGuard = script.indexOf('setMsg(t("claim.receiptRequired"), "err")');
-    const linkRequest = script.indexOf('PREMIUM_API_BASE + "/api/link"');
-    const instantMessage = script.indexOf('id="ppInstantMsg"');
-    const receiptBody = script.indexOf('class="ppanel__receiptbody"');
-    const receiptMessage = script.indexOf('id="ppClaimMsg"');
-    expect(script).toContain('id="ppClaimForm"');
-    expect(script).toContain('const msg = document.getElementById("ppInstantMsg")');
-    expect(script).toContain('const input = document.getElementById("ppClaimCode")');
-    expect(script).toContain('const btn = document.getElementById("ppClaimBtn")');
-    expect(script).toContain('const button = document.getElementById("ppActivateBtn")');
-    expect(emptyGuard).toBeGreaterThan(-1);
-    expect(linkRequest).toBeGreaterThan(emptyGuard);
-    expect(instantMessage).toBeGreaterThan(-1);
-    expect(instantMessage).toBeLessThan(receiptBody);
-    expect(receiptMessage).toBeGreaterThan(receiptBody);
-  });
   it('fits translated hero lines without changing the shared visual footprint', () => {
     const script = source('site/js/main-v51.js');
     const css = source('site/css/main-v43.css');
@@ -62,7 +44,6 @@ describe('site UX polish contract', () => {
       'account.logoutConfirmBody',
       'account.logoutCancel',
       'account.logoutConfirmAction',
-      'claim.receiptRequired',
     ];
     for (const lang of LANGS) {
       const parsed = JSON.parse(source(`tools/i18n-src/${lang}.json`));

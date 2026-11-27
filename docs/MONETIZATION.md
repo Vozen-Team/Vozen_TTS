@@ -15,7 +15,8 @@
 Payment: the hosted plans currently use the site's **Stripe Checkout** flow (the six
 monthly/yearly price IDs are injected by the production deploy workflow). Discord **Premium
 Apps** (native, in-app) remains the intended second channel once the app is eligible; the
-legacy **Ko-fi / Patreon + `/redeem` codes** path is still supported for manual grants.
+legacy **`/redeem` codes** path is still supported for manual grants. Ko-fi is no longer
+used: its webhook and claim routes were removed, and passes it granted run until they expire.
 
 ---
 

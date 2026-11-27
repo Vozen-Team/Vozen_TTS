@@ -106,15 +106,12 @@ use vozen_api::{
     dashboard_oauth::DiscordDashboardAuthorizer,
     discord_oauth::DiscordOAuthVerifier,
     install_api::InstallApiConfig,
-    kofi_webhook::KofiWebhookConfig,
-    map_public_status,
-    premium_api::{ClaimHelpNotifier, DiscordClaimHelpNotifier, PremiumApiConfig},
-    runtime_router,
+    map_public_status, runtime_router,
     topgg_webhook::TopggWebhookConfig,
     web_analytics::CloudflareWebAnalyticsConfig,
 };
 use vozen_contracts::DiscordCommandCatalog;
-use vozen_core::{SynthesisEngine, parse_kofi_shop_map};
+use vozen_core::SynthesisEngine;
 use vozen_discord::{
     CommandRegistrationConfig, CompositeGatewayEventSink, CoreVoiceSettings,
     DiscordDashboardOptionsProvider, DiscordHttpCommandRegistrationClient, DiscordRuntimeConfig,
@@ -220,9 +217,6 @@ struct PremiumHttpConfig {
     client_id: Option<String>,
     dashboard_client_ids: Vec<String>,
     origin: String,
-    kofi_webhook_token: Option<String>,
-    kofi_shop_map: Option<String>,
-    claim_help_webhook_url: Option<String>,
     stripe_secret_key: Option<String>,
     stripe_publishable_key: Option<String>,
     stripe_webhook_secret: Option<String>,
@@ -1581,7 +1575,7 @@ fn pronunciation_event_sink(
     Ok(Some(Arc::new(
         pronunciation_sink::PronunciationGatewaySink::new(
             store,
-            nonempty_env("KOFI_URL").unwrap_or_default(),
+            premium_page_url(),
             payments_enabled,
         )
         .map_err(|_| RuntimeError::PronunciationGateway)?,
@@ -1918,7 +1912,7 @@ fn premium_event_sink(
     Ok(Some(Arc::new(
         premium_sink::PremiumGatewaySink::new(
             store,
-            nonempty_env("KOFI_URL").unwrap_or_default(),
+            premium_page_url(),
             payments_enabled,
             client_id,
             redemption_secret,
@@ -2164,30 +2158,18 @@ fn premium_http_from_environment() -> Result<Option<PremiumHttpConfig>, RuntimeE
     let stripe_publishable_key = payments_enabled_from_environment()
         .then(|| nonempty_env("STRIPE_PUBLISHABLE_KEY"))
         .flatten();
-    // Once Stripe is selected, an old Ko-fi secret cannot re-enable the retired checkout path.
-    // Historical Ko-fi entitlements remain in SQLite and continue to work.
-    let kofi_webhook_token = (!stripe_secret_key.is_some() && payments_enabled_from_environment())
-        .then(|| nonempty_env("KOFI_WEBHOOK_TOKEN"))
-        .flatten();
-    let kofi_shop_map = kofi_webhook_token
-        .as_ref()
-        .and_then(|_| nonempty_env("KOFI_SHOP_MAP"));
-    if !browser_api_enabled && kofi_webhook_token.is_none() {
+    // Ko-fi is retired: no Ko-fi secret can open an HTTP listener or a webhook route. Historical
+    // Ko-fi entitlements remain in SQLite and keep working until they expire.
+    if !browser_api_enabled {
         return Ok(None);
     }
     let ecosystem_client_id = nonempty_env("ECOSYSTEM_OAUTH_CLIENT_ID");
     let product_client_id = nonempty_env("CLIENT_ID");
-    let client_id = if browser_api_enabled {
-        Some(
-            ecosystem_client_id
-                .clone()
-                .ok_or(RuntimeError::MissingClientId)?,
-        )
-    } else {
+    let client_id = Some(
         ecosystem_client_id
             .clone()
-            .or_else(|| product_client_id.clone())
-    };
+            .ok_or(RuntimeError::MissingClientId)?,
+    );
     let dashboard_client_ids = [ecosystem_client_id, product_client_id]
         .into_iter()
         .flatten()
@@ -2240,10 +2222,6 @@ fn premium_http_from_environment() -> Result<Option<PremiumHttpConfig>, RuntimeE
         client_id,
         dashboard_client_ids,
         origin,
-        kofi_webhook_token,
-        kofi_shop_map,
-        claim_help_webhook_url: nonempty_env("CLAIM_HELP_WEBHOOK_URL")
-            .or_else(|| nonempty_env("ERROR_WEBHOOK_URL")),
         stripe_secret_key,
         stripe_publishable_key,
         stripe_webhook_secret: payments_enabled_from_environment()
@@ -2257,10 +2235,23 @@ fn premium_http_enabled(raw: Option<&str>) -> bool {
     raw.is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
 }
 
-/// Payment providers are fail-closed. Stripe will be enabled explicitly once its checkout and
-/// webhook contracts are ready; an unset flag must never expose a legacy Ko-fi path.
+/// Payment providers are fail-closed. Stripe is enabled explicitly; an unset flag must never
+/// expose a payment path.
 fn payments_enabled_from_environment() -> bool {
     premium_http_enabled(env::var("RUST_PAYMENTS_ENABLED").ok().as_deref())
+}
+
+/// Public pricing page linked from the bot's Premium upsell messages. It follows the site origin
+/// the browser API already trusts (`PREMIUM_API_ORIGIN`, normally `https://vozen.org`).
+fn premium_page_url() -> String {
+    premium_page_url_for(nonempty_env("PREMIUM_API_ORIGIN").as_deref())
+}
+
+fn premium_page_url_for(origin: Option<&str>) -> String {
+    format!(
+        "{}/#premium",
+        origin.unwrap_or("https://vozen.org").trim_end_matches('/')
+    )
 }
 
 fn browser_api_promoted(raw: Option<&str>, premium_http: Option<&PremiumHttpConfig>) -> bool {
@@ -3072,12 +3063,10 @@ fn build_http_router(
         return runtime_router(RuntimeRouterConfig {
             public_status,
             account: None,
-            premium: None,
             install,
             stripe: None,
             dashboard: None,
             admin: None,
-            kofi_webhook: None,
             topgg_webhook: topgg_webhook.map(|config| TopggWebhookConfig {
                 webhook_secret: config.webhook_secret,
                 giveaway_webhook_secrets: config.giveaway_webhook_secrets,
@@ -3104,17 +3093,6 @@ fn build_http_router(
         })
         .transpose()?;
     let now = Arc::new(system_now_ms);
-    let kofi_webhook =
-        config
-            .kofi_webhook_token
-            .clone()
-            .map(|verification_token| KofiWebhookConfig {
-                verification_token,
-                store: store.clone(),
-                shop_map: parse_kofi_shop_map(config.kofi_shop_map.as_deref()),
-                now: now.clone(),
-                on_unmapped_shop: None,
-            });
     let dashboard = dashboard
         .map(|dashboard| {
             let models = discover_piper_models(&dashboard.models_dir)?;
@@ -3229,40 +3207,22 @@ fn build_http_router(
             })
         })
         .transpose()?;
-    let (account, premium) = if config.browser_api_enabled {
+    let account = if config.browser_api_enabled {
         let verifier = verifier.clone().ok_or(RuntimeError::MissingClientId)?;
-        (
-            Some(AccountApiConfig {
-                origin: config.origin.clone(),
-                store: store.clone(),
-                identity_verifier: verifier.clone(),
-                now: now.clone(),
-                // Guild names are sourced only from the current gateway process; a missing cache
-                // entry stays `null` rather than causing an outbound lookup or leaking old data.
-                resolve_guild_name: Some(Arc::new({
-                    let gateway_state = gateway_state.clone();
-                    move |guild_id| gateway_state.guild_name(guild_id)
-                })),
-            }),
-            Some(PremiumApiConfig {
-                origin: config.origin.clone(),
-                kofi_webhook_token: config.kofi_webhook_token.clone(),
-                store: store.clone(),
-                identity_verifier: verifier,
-                now: now.clone(),
-                claim_help_notifier: if config.kofi_webhook_token.is_some() {
-                    config
-                        .claim_help_webhook_url
-                        .clone()
-                        .map(DiscordClaimHelpNotifier::new)
-                        .map(|notifier| Arc::new(notifier) as Arc<dyn ClaimHelpNotifier>)
-                } else {
-                    None
-                },
-            }),
-        )
+        Some(AccountApiConfig {
+            origin: config.origin.clone(),
+            store: store.clone(),
+            identity_verifier: verifier,
+            now: now.clone(),
+            // Guild names are sourced only from the current gateway process; a missing cache
+            // entry stays `null` rather than causing an outbound lookup or leaking old data.
+            resolve_guild_name: Some(Arc::new({
+                let gateway_state = gateway_state.clone();
+                move |guild_id| gateway_state.guild_name(guild_id)
+            })),
+        })
     } else {
-        (None, None)
+        None
     };
     let stripe = if config.browser_api_enabled {
         match (
@@ -3309,7 +3269,6 @@ fn build_http_router(
     runtime_router(RuntimeRouterConfig {
         public_status,
         account,
-        premium,
         stripe,
         install,
         // Only `RUST_DASHBOARD_ENABLED=true` produces this route. Its authorizer rechecks
@@ -3317,7 +3276,6 @@ fn build_http_router(
         // provider asks Discord for the bot's current authorised channels and roles.
         dashboard,
         admin,
-        kofi_webhook,
         topgg_webhook: topgg_webhook.map(|config| TopggWebhookConfig {
             webhook_secret: config.webhook_secret,
             giveaway_webhook_secrets: config.giveaway_webhook_secrets,
@@ -3949,9 +3907,6 @@ mod tests {
             client_id: Some("client".into()),
             dashboard_client_ids: vec!["client".into()],
             origin: "https://bot.example.com".into(),
-            kofi_webhook_token: None,
-            kofi_shop_map: None,
-            claim_help_webhook_url: None,
             stripe_secret_key: None,
             stripe_publishable_key: None,
             stripe_webhook_secret: None,
@@ -4592,18 +4547,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kofi_webhook_can_run_without_the_browser_premium_api() {
+    async fn retired_kofi_routes_are_not_served_by_the_full_browser_api() {
         let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
         let app = build_http_router(
             PathBuf::from("/tmp/vozen-test.sqlite"),
             Some(PremiumHttpConfig {
-                browser_api_enabled: false,
-                client_id: None,
-                dashboard_client_ids: Vec::new(),
+                browser_api_enabled: true,
+                client_id: Some("123456789012345678".into()),
+                dashboard_client_ids: vec!["123456789012345678".into()],
                 origin: "https://bot.example.com".into(),
-                kofi_webhook_token: Some("token".into()),
-                kofi_shop_map: None,
-                claim_help_webhook_url: None,
                 stripe_secret_key: None,
                 stripe_publishable_key: None,
                 stripe_webhook_secret: None,
@@ -4621,20 +4573,41 @@ mod tests {
             GatewayState::default(),
             None,
         )
-        .expect("kofi-only router");
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .expect("response");
-        // The route is present even without the browser Premium API; an unsigned
-        // webhook request is rejected by the Ko-fi verifier before payload parsing.
-        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        .expect("browser API router");
+        // Former Ko-fi webhook paths and the receipt/email/help activation endpoints.
+        for uri in [
+            "/",
+            "/webhook/kofi",
+            "/api/link",
+            "/api/activate",
+            "/api/claim-help",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NOT_FOUND,
+                "{uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn premium_upsell_links_to_the_site_pricing_section() {
+        assert_eq!(premium_page_url_for(None), "https://vozen.org/#premium");
+        assert_eq!(
+            premium_page_url_for(Some("https://staging.example.org/")),
+            "https://staging.example.org/#premium"
+        );
     }
 
     #[test]
