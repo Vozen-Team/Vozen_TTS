@@ -21,7 +21,9 @@ use vozen_discord::{
     GAME_CATALOG, JOKE_LANGUAGES, VoiceDisplayCatalog, VoiceResponseLocalizer,
     locale_display_options,
 };
-use vozen_store::SqliteStore;
+use vozen_store::{SqliteStore, UserEngine};
+
+use crate::voice_preference_sink::{engine_token, voice_engines_for_model};
 
 use vozen_discord::{GatewayEventDispatchError, GatewayEventSink};
 
@@ -81,6 +83,7 @@ impl AutocompleteGatewaySink {
                     || (matches!(subcommand, Some("set" | "favorite" | "unfavorite"))
                         && self.options.voice_preferences)
             }
+            ("voice", "engine") => subcommand == Some("set") && self.options.voice_preferences,
             ("config", "model") => {
                 subcommand == Some("default-voice") && self.options.config_default_voice
             }
@@ -111,6 +114,9 @@ impl AutocompleteGatewaySink {
                 locale,
                 &self.displays,
             ),
+            ("voice", "engine") => {
+                filter_voice_engines(&self.options.available_models, &command.data.options, query)
+            }
             ("game", "game") => filter_games(query, locale, &self.localizer),
             ("game", "language") => filter_word_chain_languages(query),
             (
@@ -189,6 +195,42 @@ impl GatewayEventSink for AutocompleteGatewaySink {
     async fn on_guild_delete(&self, _guild_id: &str) -> Result<(), GatewayEventDispatchError> {
         Ok(())
     }
+}
+
+fn filter_voice_engines(
+    models: &[String],
+    options: &[CommandDataOption],
+    query: &str,
+) -> Vec<Choice> {
+    let Some(model) = options.iter().find_map(|option| match &option.value {
+        CommandDataOptionValue::SubCommand(children) if option.name == "set" => {
+            children.iter().find_map(|child| match &child.value {
+                CommandDataOptionValue::String(model) if child.name == "model" => Some(model),
+                _ => None,
+            })
+        }
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+    if !models.contains(model) {
+        return Vec::new();
+    }
+    let query = query.trim().to_lowercase();
+    voice_engines_for_model(model)
+        .map(|engine| Choice {
+            name: match engine {
+                UserEngine::Google | UserEngine::Gcloud => "Default (Google TTS)",
+                UserEngine::Piper => "Piper",
+                UserEngine::Kokoro => "💎 Kokoro (Premium neural)",
+            }
+            .to_owned(),
+            value: engine_token(engine).to_owned(),
+        })
+        .filter(|choice| {
+            choice.name.to_lowercase().contains(&query) || choice.value.contains(&query)
+        })
+        .collect()
 }
 
 fn filter_models(
@@ -334,6 +376,43 @@ fn subcommand_name(options: &[CommandDataOption]) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_set_engine_suggestions_follow_the_selected_model() {
+        let models = [
+            "de_DE-thorsten-medium",
+            "en_US-amy-medium",
+            "uk_UA-google-medium",
+        ]
+        .map(str::to_owned);
+        let suggestions = |model: Option<&str>, query: &str| {
+            let mut options = vec![serde_json::json!({
+                "name": "engine", "type": 3, "value": query, "focused": true
+            })];
+            if let Some(model) = model {
+                options.push(serde_json::json!({"name": "model", "type": 3, "value": model}));
+            }
+            let options: Vec<CommandDataOption> = serde_json::from_value(serde_json::json!([
+                {"name": "set", "type": 1, "options": options}
+            ]))
+            .expect("Discord autocomplete options");
+            filter_voice_engines(&models, &options, query)
+                .into_iter()
+                .map(|choice| choice.value)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(suggestions(Some(&models[0]), ""), ["google", "piper"]);
+        assert_eq!(
+            suggestions(Some(&models[1]), ""),
+            ["google", "piper", "kokoro"]
+        );
+        assert_eq!(suggestions(Some(&models[1]), "premium"), ["kokoro"]);
+        assert_eq!(suggestions(Some(&models[2]), ""), ["google"]);
+        assert!(suggestions(Some(&models[0]), "kokoro").is_empty());
+        assert!(suggestions(Some("de_DE"), "").is_empty());
+        assert!(suggestions(None, "").is_empty());
+    }
 
     #[test]
     fn filters_are_bounded_and_match_node_routing() {

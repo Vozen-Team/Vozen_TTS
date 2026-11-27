@@ -421,7 +421,7 @@ pub use voice_preference_command::{
 };
 pub use voice_preference_service::{
     VoicePreferenceInvocation, VoicePreferenceOutcome, VoicePreferenceService,
-    VoicePreferenceSettings, sanitize_speaker_name,
+    VoicePreferenceSettings, sanitize_speaker_name, voice_engine_supports_model,
 };
 #[cfg(feature = "voice-driver")]
 pub use voice_receiver::SongbirdVoiceReceiver;

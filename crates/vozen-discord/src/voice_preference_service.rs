@@ -283,10 +283,11 @@ impl VoicePreferenceService {
         };
         let engine = match engine {
             Some(engine) => match parse_engine(&engine) {
-                Some(engine) => engine,
-                None => return VoicePreferenceOutcome::InvalidEngine,
+                Some(engine) if voice_engine_supports_model(engine, &model) => engine,
+                _ => return VoicePreferenceOutcome::InvalidEngine,
             },
-            None => current_engine,
+            None if voice_engine_supports_model(current_engine, &model) => current_engine,
+            None => UserEngine::Google,
         };
         if is_premium_engine(engine) {
             let unlocked = store.is_user_premium(user_id, now_ms).and_then(|user| {
@@ -368,6 +369,15 @@ impl VoicePreferenceService {
             Ok(()) => VoicePreferenceOutcome::EffectSet { effect },
             Err(_) => VoicePreferenceOutcome::StoreUnavailable,
         }
+    }
+}
+
+pub fn voice_engine_supports_model(engine: UserEngine, model: &str) -> bool {
+    match engine {
+        UserEngine::Google => true,
+        UserEngine::Gcloud => false, // Google HD is no longer offered for new selections.
+        UserEngine::Piper => !model.contains("-google-"),
+        UserEngine::Kokoro => vozen_tts::kokoro_voice_for_model(model).is_some(),
     }
 }
 
@@ -559,6 +569,58 @@ mod tests {
                 }
             ),
             VoicePreferenceOutcome::InvalidSpeed
+        );
+    }
+
+    #[test]
+    fn rejects_an_explicit_incompatible_engine_and_replaces_an_incompatible_saved_default() {
+        let (store, mut service) = service();
+        let model = "de_DE-thorsten-medium";
+        service.settings.available_models.push(model.into());
+        let previous = UserVoice {
+            model: "en_US-amy-medium".into(),
+            speed: 1.0,
+            engine: UserEngine::Kokoro,
+        };
+        store
+            .lock()
+            .expect("store")
+            .set_user_voice("guild", "user", &previous)
+            .expect("seed");
+        let set_voice = |engine: Option<&str>| {
+            service.execute(
+                invocation(),
+                VoicePreferenceCommand::Set {
+                    model: model.into(),
+                    speed: None,
+                    engine: engine.map(str::to_owned),
+                },
+            )
+        };
+
+        assert_eq!(
+            set_voice(Some("kokoro")),
+            VoicePreferenceOutcome::InvalidEngine
+        );
+        assert_eq!(
+            set_voice(Some("gcloud")),
+            VoicePreferenceOutcome::InvalidEngine
+        );
+        assert_eq!(
+            store
+                .lock()
+                .expect("store")
+                .get_user_voice("guild", "user")
+                .expect("load"),
+            Some(previous)
+        );
+        assert_eq!(
+            set_voice(None),
+            VoicePreferenceOutcome::SavedVoice {
+                model: model.into(),
+                speed: 1.0,
+                engine: UserEngine::Google,
+            }
         );
     }
 

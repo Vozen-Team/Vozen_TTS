@@ -32,6 +32,7 @@ uuid.workspace = true
 vozen-contracts = { path = "../vozen-contracts" }
 vozen-core = { path = "../vozen-core" }
 vozen-store = { path = "../vozen-store" }
+vozen-tts = { path = "../vozen-tts" }
 
 [lints]
 workspace = true

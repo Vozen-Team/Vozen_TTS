@@ -25,6 +25,7 @@ use vozen_discord::{
     GatewayEventDispatchError, GatewayEventSink, VoiceDisplayCatalog, VoicePreferenceCommand,
     VoicePreferenceInvocation, VoicePreferenceOutcome, VoicePreferenceService,
     VoicePreferenceSettings, VoiceResponseLocalizer, parse_voice_preference_command,
+    voice_engine_supports_model,
 };
 use vozen_store::{SqliteStore, UserEngine, VoiceEffect};
 
@@ -71,6 +72,14 @@ struct VoiceConfigSession {
     speed: f64,
     language_page: usize,
     issued_at_ms: i64,
+}
+
+impl VoiceConfigSession {
+    fn select_compatible_engine(&mut self) {
+        if !voice_engines_for_model(&self.model).any(|engine| engine_token(engine) == self.engine) {
+            self.engine = engine_token(UserEngine::Google).to_owned();
+        }
+    }
 }
 
 pub struct VoicePreferenceGatewaySink {
@@ -289,16 +298,15 @@ impl VoicePreferenceGatewaySink {
             ));
         }
 
-        let engines = ["google", "piper", "kokoro"]
-            .into_iter()
+        let engines = voice_engines_for_model(&session.model)
             .map(|engine| {
-                let label = if engine == "kokoro" {
-                    format!("💎 {}", config_engine_label(engine))
+                let label = if engine == UserEngine::Kokoro {
+                    format!("💎 {}", engine_label(engine))
                 } else {
-                    config_engine_label(engine).to_owned()
+                    engine_label(engine).to_owned()
                 };
-                CreateSelectMenuOption::new(label, engine)
-                    .default_selection(engine == session.engine)
+                let token = engine_token(engine);
+                CreateSelectMenuOption::new(label, token).default_selection(token == session.engine)
             })
             .collect();
         rows.push(CreateActionRow::SelectMenu(
@@ -429,7 +437,7 @@ impl VoicePreferenceGatewaySink {
             .unwrap_or("google")
             .to_owned();
         let session_id = command.id.get().to_string();
-        let session = VoiceConfigSession {
+        let mut session = VoiceConfigSession {
             owner_user_id: user_id,
             guild_id,
             channel_id: command.channel_id.get().to_string(),
@@ -443,6 +451,7 @@ impl VoicePreferenceGatewaySink {
             language_page: 0,
             issued_at_ms: system_now_ms(),
         };
+        session.select_compatible_engine();
         let content = self.config_summary(&session)?;
         let rows = self.config_components(&session_id, &session)?;
         self.prune_config_sessions(session.issued_at_ms);
@@ -626,7 +635,10 @@ impl VoicePreferenceGatewaySink {
                     true
                 }
             }
-            "engine" if matches!(selected.as_str(), "google" | "piper" | "kokoro") => {
+            "engine"
+                if voice_engines_for_model(&session.model)
+                    .any(|engine| engine_token(engine) == selected) =>
+            {
                 session.engine = selected;
                 true
             }
@@ -645,6 +657,7 @@ impl VoicePreferenceGatewaySink {
                 .insert(session_id.to_owned(), session);
             return Ok(true);
         }
+        session.select_compatible_engine();
         let content = self.config_summary(&session)?;
         let rows = self.config_components(session_id, &session)?;
         self.config_sessions
@@ -1122,7 +1135,13 @@ fn engine_label(engine: UserEngine) -> &'static str {
     }
 }
 
-fn engine_token(engine: UserEngine) -> &'static str {
+pub(crate) fn voice_engines_for_model(model: &str) -> impl Iterator<Item = UserEngine> {
+    [UserEngine::Google, UserEngine::Piper, UserEngine::Kokoro]
+        .into_iter()
+        .filter(move |&engine| voice_engine_supports_model(engine, model))
+}
+
+pub(crate) fn engine_token(engine: UserEngine) -> &'static str {
     match engine {
         UserEngine::Google => "google",
         UserEngine::Piper => "piper",
@@ -1489,6 +1508,62 @@ mod tests {
         assert_eq!(parse_config_component("vcfg:lang:123:extra"), None);
         assert_eq!(parse_config_component("vcfg:lang:abc"), None);
         assert_eq!(parse_config_component("other:lang:123"), None);
+    }
+
+    #[test]
+    fn voice_config_updates_engine_choices_when_the_language_changes() {
+        let english = "en_US-amy-medium";
+        let german = "de_DE-thorsten-medium";
+        let models = vec![english.to_owned(), german.to_owned()];
+        let store = Arc::new(Mutex::new(SqliteStore::open_in_memory().expect("store")));
+        let sink = VoicePreferenceGatewaySink::new(
+            store,
+            VoicePreferenceSettings {
+                available_models: models.clone(),
+                default_speed: 1.0,
+            },
+        )
+        .expect("voice configuration sink");
+        let mut session = VoiceConfigSession {
+            owner_user_id: "user".into(),
+            guild_id: "guild".into(),
+            channel_id: "channel".into(),
+            locale: "en".into(),
+            guild_locale: None,
+            models,
+            locales: sink.config_locales(),
+            model: english.into(),
+            engine: "kokoro".into(),
+            speed: 1.0,
+            language_page: 0,
+            issued_at_ms: 0,
+        };
+        let engine_options = |session: &VoiceConfigSession| {
+            let rows = serde_json::to_value(sink.config_components("123", session).expect("rows"))
+                .expect("serialized rows");
+            rows.as_array()
+                .expect("action rows")
+                .iter()
+                .map(|row| &row["components"][0])
+                .find(|component| component["custom_id"] == "vcfg:engine:123")
+                .expect("engine menu")["options"]
+                .as_array()
+                .expect("engine options")
+                .clone()
+        };
+
+        assert!(
+            engine_options(&session)
+                .iter()
+                .any(|option| { option["value"] == "kokoro" && option["default"] == true })
+        );
+        session.model = german.into();
+        session.select_compatible_engine();
+        let options = engine_options(&session);
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["value"], "google");
+        assert_eq!(options[0]["default"], true);
+        assert_eq!(options[1]["value"], "piper");
     }
 
     #[test]
